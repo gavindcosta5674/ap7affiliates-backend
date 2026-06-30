@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
+from datetime import datetime, timedelta, date
+from urllib.parse import quote
 import uvicorn
 import secrets
 
@@ -73,6 +75,10 @@ affiliate_id_counter = 1003
 links_db = []
 link_id_counter = 0
 
+# Simple raw daily data sheet (admin can add rows, affiliate APIs can fetch them)
+raw_data_db = []
+raw_data_counter = 0
+
 # Report data keyed by affiliate_id
 reports_db = {
     "AFF-1001": [
@@ -98,11 +104,11 @@ media_db = [
 
 # Players database
 players_db = [
-    {"player_id": "PLR1001", "player_username": "player_one", "affiliate_id": "AFF-1001", "ftd_date": "2025-01-15", "deposit_total": 5000.00, "deposit_count": 3, "withdrawal_total": 1200.00, "bonus_total": 250.00, "revenue": 3550.00, "commission": 887.50},
-    {"player_id": "PLR1002", "player_username": "slot_king", "affiliate_id": "AFF-1001", "ftd_date": "2025-02-03", "deposit_total": 12500.00, "deposit_count": 5, "withdrawal_total": 4300.00, "bonus_total": 750.00, "revenue": 7450.00, "commission": 1862.50},
-    {"player_id": "PLR1003", "player_username": "roulette_pro", "affiliate_id": "AFF-1002", "ftd_date": "2025-03-10", "deposit_total": 8700.00, "deposit_count": 4, "withdrawal_total": 2100.00, "bonus_total": 500.00, "revenue": 6100.00, "commission": 1830.00},
-    {"player_id": "PLR1004", "player_username": "blackjack_ace", "affiliate_id": "AFF-1003", "ftd_date": "2025-04-22", "deposit_total": 3200.00, "deposit_count": 2, "withdrawal_total": 800.00, "bonus_total": 150.00, "revenue": 2250.00, "commission": 450.00},
-    {"player_id": "PLR1005", "player_username": "lucky_seven", "affiliate_id": "AFF-1003", "ftd_date": "2025-05-05", "deposit_total": 18400.00, "deposit_count": 6, "withdrawal_total": 9200.00, "bonus_total": 1200.00, "revenue": 8000.00, "commission": 1600.00},
+    {"player_id": "PLR1001", "player_username": "player_one", "affiliate_id": "AFF-1001", "ftd_date": "2025-01-15", "registration_date": "2025-01-10", "deposit_total": 5000.00, "deposit_count": 3, "withdrawal_total": 1200.00, "bonus_total": 250.00, "revenue": 3550.00, "commission": 887.50},
+    {"player_id": "PLR1002", "player_username": "slot_king", "affiliate_id": "AFF-1001", "ftd_date": "2025-02-03", "registration_date": "2025-01-28", "deposit_total": 12500.00, "deposit_count": 5, "withdrawal_total": 4300.00, "bonus_total": 750.00, "revenue": 7450.00, "commission": 1862.50},
+    {"player_id": "PLR1003", "player_username": "roulette_pro", "affiliate_id": "AFF-1002", "ftd_date": "2025-03-10", "registration_date": "2025-03-01", "deposit_total": 8700.00, "deposit_count": 4, "withdrawal_total": 2100.00, "bonus_total": 500.00, "revenue": 6100.00, "commission": 1830.00},
+    {"player_id": "PLR1004", "player_username": "blackjack_ace", "affiliate_id": "AFF-1003", "ftd_date": "2025-04-22", "registration_date": "2025-04-12", "deposit_total": 3200.00, "deposit_count": 2, "withdrawal_total": 800.00, "bonus_total": 150.00, "revenue": 2250.00, "commission": 450.00},
+    {"player_id": "PLR1005", "player_username": "lucky_seven", "affiliate_id": "AFF-1003", "ftd_date": "2025-05-05", "registration_date": "2025-04-30", "deposit_total": 18400.00, "deposit_count": 6, "withdrawal_total": 9200.00, "bonus_total": 1200.00, "revenue": 8000.00, "commission": 1600.00},
 ]
 player_id_counter = 1005
 
@@ -127,6 +133,67 @@ def find_affiliate_by_id(aid: str):
             return aff
     return None
 
+
+def resolve_report_dates(period: Optional[str], date_from: Optional[str], date_to: Optional[str]):
+    if period and period != 'custom':
+        today = date.today()
+        if period == '7days':
+            start = today - timedelta(days=6)
+            end = today
+        elif period == '15days':
+            start = today - timedelta(days=14)
+            end = today
+        elif period == '30days':
+            start = today - timedelta(days=29)
+            end = today
+        elif period == 'last_month':
+            if today.month == 1:
+                start = date(today.year - 1, 12, 1)
+                end = date(today.year - 1, 12, 31)
+            else:
+                start = date(today.year, today.month - 1, 1)
+                end = date(today.year, today.month, 1) - timedelta(days=1)
+        elif period == '1year':
+            start = today - timedelta(days=365)
+            end = today
+        else:
+            start = None
+            end = None
+        return start.strftime('%Y-%m-%d') if start else None, end.strftime('%Y-%m-%d') if end else None
+
+    return date_from, date_to
+
+
+def build_report_entry(row: dict, affiliate_id: Optional[str] = None, commission_percentage: Optional[float] = None):
+    deposit_count = int(row.get("count") or row.get("deposit_count") or 0)
+    withdrawal_count = int(row.get("withdrawal_count") if row.get("withdrawal_count") is not None else (1 if float(row.get("withdrawal", 0) or 0) > 0 else 0))
+    bonus_count = int(row.get("bonus_count") if row.get("bonus_count") is not None else (1 if float(row.get("bonus", 0) or 0) > 0 else 0))
+    transaction_count = deposit_count + withdrawal_count + bonus_count
+    entry = dict(row)
+    if affiliate_id:
+        entry["affiliate_id"] = affiliate_id
+    entry["registration_date"] = entry.get("registration_date") or entry.get("registered_at") or entry.get("ftd_date") or ""
+    entry["ftd_date"] = entry.get("ftd_date") or entry.get("first_deposit_date") or ""
+    entry["deposit_count"] = deposit_count
+    entry["withdrawal_count"] = withdrawal_count
+    entry["bonus_count"] = bonus_count
+    entry["transaction_count"] = transaction_count
+    if commission_percentage is not None:
+        entry["commission_percentage"] = commission_percentage
+        entry["commission"] = round(float(entry.get("revenue", 0)) * float(commission_percentage) / 100, 2)
+    return entry
+
+
+def build_tracking_url(affiliate_id: str, platform: str, campaign: str) -> str:
+    base = "https://ap7affiliates.online/"
+    params = {
+        "aff": affiliate_id,
+        "source": platform,
+        "campaign": campaign,
+    }
+    query = "&".join(f"{key}={quote(str(value), safe='')}" for key, value in params.items() if value)
+    return f"{base}?{query}" if query else base
+
 # ── Pydantic Models ───────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
     username: str
@@ -141,6 +208,20 @@ class LoginResponse(BaseModel):
 class CreateLinkRequest(BaseModel):
     name: str
     platform: str
+
+
+class RawDataEntry(BaseModel):
+    date: str
+    affiliate_id: str
+    player_username: str
+    registration_date: Optional[str] = None
+    deposit_amount: float = 0.0
+    withdrawal_amount: float = 0.0
+    bonus_amount: float = 0.0
+
+class CsvImportRequest(BaseModel):
+    csv_text: str
+    affiliate_id: Optional[str] = None
 
 # =========================================================================
 # MASTER ADMIN ENDPOINTS
@@ -263,27 +344,74 @@ def get_dashboard():
     }
 
 @app.get("/api/reports")
-def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = None, player_username: str = None):
+def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = None, player_username: str = None, period: str = None):
+    date_from, date_to = resolve_report_dates(period, date_from, date_to)
     all_reports = []
+    for player in players_db:
+        aff_id = player.get("affiliate_id")
+        if affiliate_id and aff_id != affiliate_id:
+            continue
+        aff = find_affiliate_by_id(aff_id)
+        commission_percentage = aff["commission_pct"] if aff else 20
+        row = {
+            "id": player.get("player_id"),
+            "player_id": player.get("player_id"),
+            "player_username": player.get("player_username"),
+            "affiliate_id": aff_id,
+            "ftd_date": player.get("ftd_date") or "",
+            "registration_date": player.get("registration_date") or player.get("ftd_date") or "",
+            "deposit": player.get("deposit_total", 0),
+            "count": player.get("deposit_count", 0),
+            "deposit_count": player.get("deposit_count", 0),
+            "withdrawal": player.get("withdrawal_total", 0),
+            "withdrawal_count": 1 if float(player.get("withdrawal_total", 0) or 0) > 0 else 0,
+            "bonus": player.get("bonus_total", 0),
+            "bonus_count": 1 if float(player.get("bonus_total", 0) or 0) > 0 else 0,
+            "revenue": player.get("revenue", 0),
+            "commission": player.get("commission", 0),
+        }
+        all_reports.append(build_report_entry(row, affiliate_id=aff_id, commission_percentage=commission_percentage))
+
     for aff_id, rows in reports_db.items():
         for r in rows:
-            r_copy = dict(r)
-            r_copy["affiliate_id"] = aff_id
-            # Get commission percentage from affiliate
+            if any(existing["player_id"] == r.get("id") for existing in all_reports if existing.get("player_id")):
+                continue
             aff = find_affiliate_by_id(aff_id)
-            r_copy["commission_percentage"] = aff["commission_pct"] if aff else 20
-            r_copy["commission"] = round(r_copy["revenue"] * r_copy["commission_percentage"] / 100, 2)
-            all_reports.append(r_copy)
+            commission_percentage = aff["commission_pct"] if aff else 20
+            all_reports.append(build_report_entry(r, affiliate_id=aff_id, commission_percentage=commission_percentage))
 
-    # Apply filters
-    if affiliate_id:
-        all_reports = [r for r in all_reports if r["affiliate_id"] == affiliate_id]
+    global raw_data_counter
+    for idx, row in enumerate(raw_data_db, start=1):
+        aff = find_affiliate_by_id(row.get("affiliate_id"))
+        commission_percentage = aff["commission_pct"] if aff else 20
+        deposit = float(row.get("deposit_amount", 0) or 0)
+        withdrawal = float(row.get("withdrawal_amount", 0) or 0)
+        bonus = float(row.get("bonus_amount", 0) or 0)
+        revenue = round(deposit - withdrawal - bonus, 2)
+        commission = round(revenue * commission_percentage / 100, 2)
+        all_reports.append(build_report_entry({
+            "id": f"RAW-{idx}",
+            "player_id": f"RAW-{idx}",
+            "player_username": row.get("player_username", ""),
+            "affiliate_id": row.get("affiliate_id", ""),
+            "ftd_date": row.get("date") or row.get("registration_date") or "",
+            "registration_date": row.get("registration_date") or row.get("date") or "",
+            "deposit": deposit,
+            "count": 1 if deposit > 0 else 0,
+            "withdrawal": withdrawal,
+            "withdrawal_count": 1 if withdrawal > 0 else 0,
+            "bonus": bonus,
+            "bonus_count": 1 if bonus > 0 else 0,
+            "revenue": revenue,
+            "commission": commission,
+        }, affiliate_id=row.get("affiliate_id"), commission_percentage=commission_percentage))
+
     if player_username:
         all_reports = [r for r in all_reports if player_username.lower() in r["player_username"].lower()]
     if date_from:
-        all_reports = [r for r in all_reports if r["ftd_date"] >= date_from]
+        all_reports = [r for r in all_reports if r.get("ftd_date", "") >= date_from]
     if date_to:
-        all_reports = [r for r in all_reports if r["ftd_date"] <= date_to]
+        all_reports = [r for r in all_reports if r.get("ftd_date", "") <= date_to]
 
     return all_reports
 
@@ -396,6 +524,7 @@ def create_player(body: dict):
         "player_username": body.get("player_username", ""),
         "affiliate_id": aff_id,
         "ftd_date": body.get("ftd_date", "2025-06-07"),
+        "registration_date": body.get("registration_date", body.get("ftd_date", "2025-06-07")),
         "deposit_total": deposit,
         "deposit_count": 1 if deposit > 0 else 0,
         "withdrawal_total": withdrawal,
@@ -413,6 +542,7 @@ def create_player(body: dict):
         "affiliate_id": aff_id,
         "player_username": body.get("player_username", ""),
         "ftd_date": body.get("ftd_date", "2025-06-07"),
+        "registration_date": body.get("registration_date", body.get("ftd_date", "2025-06-07")),
         "deposit": deposit,
         "count": 1 if deposit > 0 else 0,
         "withdrawal": withdrawal,
@@ -491,15 +621,147 @@ def affiliate_dashboard(authorization: Optional[str] = Header(None, alias="Autho
     }
 
 @app.get("/api/affiliate/reports")
-def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authorization")):
+def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authorization"), date_from: str = None, date_to: str = None, period: str = None):
     affiliate_id = get_affiliate_id_from_header(authorization)
-    rows = reports_db.get(affiliate_id, [])
+    date_from, date_to = resolve_report_dates(period, date_from, date_to)
     result = []
+    aff = find_affiliate_by_id(affiliate_id)
+    commission_percentage = aff["commission_pct"] if aff else 20
+    for player in players_db:
+        if player.get("affiliate_id") != affiliate_id:
+            continue
+        row = {
+            "id": player.get("player_id"),
+            "player_id": player.get("player_id"),
+            "player_username": player.get("player_username"),
+            "affiliate_id": affiliate_id,
+            "ftd_date": player.get("ftd_date") or "",
+            "registration_date": player.get("registration_date") or player.get("ftd_date") or "",
+            "deposit": player.get("deposit_total", 0),
+            "count": player.get("deposit_count", 0),
+            "deposit_count": player.get("deposit_count", 0),
+            "withdrawal": player.get("withdrawal_total", 0),
+            "withdrawal_count": 1 if float(player.get("withdrawal_total", 0) or 0) > 0 else 0,
+            "bonus": player.get("bonus_total", 0),
+            "bonus_count": 1 if float(player.get("bonus_total", 0) or 0) > 0 else 0,
+            "revenue": player.get("revenue", 0),
+            "commission": player.get("commission", 0),
+        }
+        result.append(build_report_entry(row, affiliate_id=affiliate_id, commission_percentage=commission_percentage))
+
+    rows = reports_db.get(affiliate_id, [])
     for r in rows:
-        r_copy = dict(r)
-        r_copy["affiliate_id"] = affiliate_id
-        result.append(r_copy)
+        if any(existing["player_id"] == r.get("id") for existing in result if existing.get("player_id")):
+            continue
+        result.append(build_report_entry(r, affiliate_id=affiliate_id, commission_percentage=commission_percentage))
+
+    for row in raw_data_db:
+        if row.get("affiliate_id") != affiliate_id:
+            continue
+        deposit = float(row.get("deposit_amount", 0) or 0)
+        withdrawal = float(row.get("withdrawal_amount", 0) or 0)
+        bonus = float(row.get("bonus_amount", 0) or 0)
+        revenue = round(deposit - withdrawal - bonus, 2)
+        result.append(build_report_entry({
+            "id": f"RAW-{len(result)}",
+            "player_id": f"RAW-{len(result)}",
+            "player_username": row.get("player_username", ""),
+            "affiliate_id": row.get("affiliate_id", ""),
+            "ftd_date": row.get("date") or row.get("registration_date") or "",
+            "registration_date": row.get("registration_date") or row.get("date") or "",
+            "deposit": deposit,
+            "count": 1 if deposit > 0 else 0,
+            "withdrawal": withdrawal,
+            "withdrawal_count": 1 if withdrawal > 0 else 0,
+            "bonus": bonus,
+            "bonus_count": 1 if bonus > 0 else 0,
+            "revenue": revenue,
+            "commission": round(revenue * commission_percentage / 100, 2),
+        }, affiliate_id=affiliate_id, commission_percentage=commission_percentage))
+
+    if date_from:
+        result = [r for r in result if r.get("ftd_date", "") >= date_from]
+    if date_to:
+        result = [r for r in result if r.get("ftd_date", "") <= date_to]
     return result
+
+@app.get("/api/raw-data")
+def get_raw_data():
+    return raw_data_db
+
+
+@app.post("/api/raw-data/import-csv")
+def import_raw_data_from_csv(body: CsvImportRequest):
+    if not body.csv_text or not body.csv_text.strip():
+        raise HTTPException(status_code=400, detail="CSV text is required")
+
+    rows = []
+    for line in body.csv_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cols = [c.strip() for c in line.replace('\r', '').split(',')]
+        if len(cols) < 5:
+            continue
+
+        date_value = cols[0]
+        deposit = float(cols[1]) if cols[1] else 0.0
+        withdraw = float(cols[2]) if cols[2] else 0.0
+        bonus = float(cols[3]) if cols[3] else 0.0
+        player_username = cols[4]
+        affiliate_id = body.affiliate_id or 'AFF-1001'
+
+        rows.append({
+            'date': date_value,
+            'affiliate_id': affiliate_id,
+            'player_username': player_username,
+            'registration_date': date_value,
+            'deposit_amount': round(deposit, 2),
+            'withdrawal_amount': round(withdraw, 2),
+            'bonus_amount': round(bonus, 2),
+        })
+
+    for row in rows:
+        create_raw_data_record(row)
+
+    return {'success': True, 'imported_count': len(rows), 'rows': rows}
+
+
+def create_raw_data_record(entry: dict):
+    global raw_data_counter
+    raw_data_counter += 1
+    record = {
+        'id': raw_data_counter,
+        'date': entry['date'],
+        'affiliate_id': entry['affiliate_id'],
+        'player_username': entry['player_username'],
+        'registration_date': entry.get('registration_date') or entry['date'],
+        'deposit_amount': round(float(entry.get('deposit_amount', 0) or 0), 2),
+        'withdrawal_amount': round(float(entry.get('withdrawal_amount', 0) or 0), 2),
+        'bonus_amount': round(float(entry.get('bonus_amount', 0) or 0), 2),
+    }
+    raw_data_db.append(record)
+    return record
+
+
+@app.post("/api/raw-data")
+def create_raw_data(entry: RawDataEntry):
+    return create_raw_data_record({
+        'date': entry.date,
+        'affiliate_id': entry.affiliate_id,
+        'player_username': entry.player_username,
+        'registration_date': entry.registration_date,
+        'deposit_amount': entry.deposit_amount,
+        'withdrawal_amount': entry.withdrawal_amount,
+        'bonus_amount': entry.bonus_amount,
+    })
+
+
+@app.get("/api/affiliate/raw-data")
+def affiliate_get_raw_data(authorization: Optional[str] = Header(None, alias="Authorization")):
+    affiliate_id = get_affiliate_id_from_header(authorization)
+    return [row for row in raw_data_db if row.get("affiliate_id") == affiliate_id]
+
 
 @app.get("/api/affiliate/media")
 def affiliate_get_media(authorization: Optional[str] = Header(None, alias="Authorization")):
@@ -517,7 +779,7 @@ def create_link(body: CreateLinkRequest, authorization: Optional[str] = Header(N
     link_id_counter += 1
     safe_name = body.name.lower().replace(" ", "_")
     safe_platform = body.platform.lower().replace(" ", "_")
-    tracking_url = f"https://brandtrack.com/register?aff={affiliate_id}&source={safe_platform}&campaign={safe_name}"
+    tracking_url = build_tracking_url(affiliate_id, safe_platform, safe_name)
     record = {
         "id": link_id_counter,
         "name": body.name,
