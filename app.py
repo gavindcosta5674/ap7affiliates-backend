@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta, date
 from urllib.parse import quote
+import csv
 import uvicorn
 import secrets
 
@@ -19,57 +20,8 @@ app.add_middleware(
 )
 
 # ── In-Memory Databases ───────────────────────────────────────────────────
-affiliates_db = [
-    {
-        "id": "AFF-1001",
-        "first_name": "John",
-        "last_name": "Smith",
-        "username": "jsmith",
-        "password": "pass123",
-        "commission_pct": 25.0,
-        "status": "active",
-        "total_players": 2,
-        "total_deposits": 17500.00,
-        "total_withdrawals": 5500.00,
-        "total_bonuses": 1000.00,
-        "revenue": 11000.00,
-        "commission": 2750.00,
-        "created_at": "2025-01-01 10:00:00",
-    },
-    {
-        "id": "AFF-1002",
-        "first_name": "Sarah",
-        "last_name": "Johnson",
-        "username": "sjohnson",
-        "password": "pass123",
-        "commission_pct": 30.0,
-        "status": "active",
-        "total_players": 1,
-        "total_deposits": 8700.00,
-        "total_withdrawals": 2100.00,
-        "total_bonuses": 500.00,
-        "revenue": 6100.00,
-        "commission": 1830.00,
-        "created_at": "2025-01-15 10:00:00",
-    },
-    {
-        "id": "AFF-1003",
-        "first_name": "Mike",
-        "last_name": "Williams",
-        "username": "mwilliams",
-        "password": "pass123",
-        "commission_pct": 20.0,
-        "status": "active",
-        "total_players": 2,
-        "total_deposits": 21600.00,
-        "total_withdrawals": 10000.00,
-        "total_bonuses": 1350.00,
-        "revenue": 10250.00,
-        "commission": 2050.00,
-        "created_at": "2025-02-01 10:00:00",
-    },
-]
-affiliate_id_counter = 1003
+affiliates_db = []
+affiliate_id_counter = 1000
 
 # Links tracking
 links_db = []
@@ -79,38 +31,14 @@ link_id_counter = 0
 raw_data_db = []
 raw_data_counter = 0
 
-# Report data keyed by affiliate_id
-reports_db = {
-    "AFF-1001": [
-        {"id": 1, "affiliate_id": "AFF-1001", "player_username": "player_one",  "ftd_date": "2025-01-15", "deposit": 5000.00,  "count": 3, "withdrawal": 1200.00, "bonus": 250.00,  "revenue": 3550.00,  "commission": 887.50, "commission_percentage": 25},
-        {"id": 2, "affiliate_id": "AFF-1001", "player_username": "slot_king",    "ftd_date": "2025-02-03", "deposit": 12500.00, "count": 5, "withdrawal": 4300.00, "bonus": 750.00,  "revenue": 7450.00,  "commission": 1862.50, "commission_percentage": 25},
-    ],
-    "AFF-1002": [
-        {"id": 3, "affiliate_id": "AFF-1002", "player_username": "roulette_pro",  "ftd_date": "2025-03-10", "deposit": 8700.00, "count": 4, "withdrawal": 2100.00, "bonus": 500.00,  "revenue": 6100.00,  "commission": 1830.00, "commission_percentage": 30},
-    ],
-    "AFF-1003": [
-        {"id": 4, "affiliate_id": "AFF-1003", "player_username": "blackjack_ace", "ftd_date": "2025-04-22", "deposit": 3200.00, "count": 2, "withdrawal": 800.00,  "bonus": 150.00,  "revenue": 2250.00,  "commission": 450.00, "commission_percentage": 20},
-        {"id": 5, "affiliate_id": "AFF-1003", "player_username": "lucky_seven",   "ftd_date": "2025-05-05", "deposit": 18400.00,"count": 6, "withdrawal": 9200.00, "bonus": 1200.00, "revenue": 8000.00,  "commission": 1600.00, "commission_percentage": 20},
-    ],
-}
+reports_db = {}
 
 # Shared media gallery
-media_db = [
-    {"id": 1, "title": "Summer Campaign Banner",   "media_type": "banner", "file_name": "summer_banner.jpg",  "file_path": "uploads/summer_banner.jpg",  "upload_date": "2025-06-01"},
-    {"id": 2, "title": "Welcome Bonus Image",      "media_type": "image",  "file_name": "welcome_bonus.png",   "file_path": "uploads/welcome_bonus.png",   "upload_date": "2025-06-05"},
-    {"id": 3, "title": "How to Play Guide",        "media_type": "pdf",    "file_name": "how_to_play.pdf",     "file_path": "uploads/how_to_play.pdf",     "upload_date": "2025-06-10"},
-    {"id": 4, "title": "Promotional Video 2025",   "media_type": "video",  "file_name": "promo_2025.mp4",      "file_path": "uploads/promo_2025.mp4",      "upload_date": "2025-06-15"},
-]
+media_db = []
 
 # Players database
-players_db = [
-    {"player_id": "PLR1001", "player_username": "player_one", "affiliate_id": "AFF-1001", "ftd_date": "2025-01-15", "registration_date": "2025-01-10", "deposit_total": 5000.00, "deposit_count": 3, "withdrawal_total": 1200.00, "bonus_total": 250.00, "revenue": 3550.00, "commission": 887.50},
-    {"player_id": "PLR1002", "player_username": "slot_king", "affiliate_id": "AFF-1001", "ftd_date": "2025-02-03", "registration_date": "2025-01-28", "deposit_total": 12500.00, "deposit_count": 5, "withdrawal_total": 4300.00, "bonus_total": 750.00, "revenue": 7450.00, "commission": 1862.50},
-    {"player_id": "PLR1003", "player_username": "roulette_pro", "affiliate_id": "AFF-1002", "ftd_date": "2025-03-10", "registration_date": "2025-03-01", "deposit_total": 8700.00, "deposit_count": 4, "withdrawal_total": 2100.00, "bonus_total": 500.00, "revenue": 6100.00, "commission": 1830.00},
-    {"player_id": "PLR1004", "player_username": "blackjack_ace", "affiliate_id": "AFF-1003", "ftd_date": "2025-04-22", "registration_date": "2025-04-12", "deposit_total": 3200.00, "deposit_count": 2, "withdrawal_total": 800.00, "bonus_total": 150.00, "revenue": 2250.00, "commission": 450.00},
-    {"player_id": "PLR1005", "player_username": "lucky_seven", "affiliate_id": "AFF-1003", "ftd_date": "2025-05-05", "registration_date": "2025-04-30", "deposit_total": 18400.00, "deposit_count": 6, "withdrawal_total": 9200.00, "bonus_total": 1200.00, "revenue": 8000.00, "commission": 1600.00},
-]
-player_id_counter = 1005
+players_db = []
+player_id_counter = 0
 
 # ── Helper functions ──────────────────────────────────────────────────────
 def find_affiliate(username: str, password: str):
@@ -122,9 +50,59 @@ def find_affiliate(username: str, password: str):
 
 def find_affiliate_by_username(username: str):
     for aff in affiliates_db:
-        if aff["username"] == username:
+        if aff["username"].lower() == username.lower():
             return aff
     return None
+
+
+def resolve_affiliate_identifier(value: str):
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+
+    # Match raw affiliate id
+    for aff in affiliates_db:
+        if aff["id"].lower() == text.lower() or aff.get("affiliate_id", "").lower() == text.lower():
+            return aff["id"]
+
+    # Match username
+    aff = find_affiliate_by_username(text)
+    if aff:
+        return aff["id"]
+
+    # Match full name
+    lower_text = text.lower()
+    for aff in affiliates_db:
+        full_name = f"{aff['first_name']} {aff['last_name']}".strip().lower()
+        if full_name == lower_text:
+            return aff["id"]
+
+    return None
+
+
+def normalize_csv_header(value: str) -> str:
+    return value.strip().lower().replace('-', '_').replace(' ', '_')
+
+
+def get_csv_value(cols: list[str], headers: Optional[list[str]], names: list[str], fallback_index: Optional[int] = None) -> str:
+    if headers:
+        for name in names:
+            if name in headers:
+                idx = headers.index(name)
+                if idx < len(cols):
+                    return cols[idx].strip()
+    if fallback_index is not None and fallback_index < len(cols):
+        return cols[fallback_index].strip()
+    return ''
+
+
+def parse_csv_float(value: str) -> float:
+    try:
+        return float(value) if value else 0.0
+    except ValueError:
+        return 0.0
 
 
 def find_affiliate_by_id(aid: str):
@@ -185,7 +163,7 @@ def build_report_entry(row: dict, affiliate_id: Optional[str] = None, commission
 
 
 def build_tracking_url(affiliate_id: str, platform: str, campaign: str) -> str:
-    base = "https://ap7affiliates.online/"
+    base = "http://ap7affiliates.online/"
     params = {
         "aff": affiliate_id,
         "source": platform,
@@ -222,6 +200,24 @@ class RawDataEntry(BaseModel):
 class CsvImportRequest(BaseModel):
     csv_text: str
     affiliate_id: Optional[str] = None
+
+class PasswordUpdateRequest(BaseModel):
+    affiliate_id: str
+    password: str
+
+class RegistrationImportRequest(BaseModel):
+    csv_text: str
+    affiliate_id: Optional[str] = None
+
+class TransactionImportRequest(BaseModel):
+    csv_text: str
+    affiliate_id: Optional[str] = None
+
+
+class RowsImportRequest(BaseModel):
+    rows: List[dict]
+    affiliate_id: Optional[str] = None
+    import_type: Optional[str] = None
 
 # =========================================================================
 # MASTER ADMIN ENDPOINTS
@@ -700,16 +696,20 @@ def import_raw_data_from_csv(body: CsvImportRequest):
         line = line.strip()
         if not line:
             continue
-        cols = [c.strip() for c in line.replace('\r', '').split(',')]
+        cols = [c.strip() for c in next(csv.reader([line]))]
         if len(cols) < 5:
             continue
 
         date_value = cols[0]
-        deposit = float(cols[1]) if cols[1] else 0.0
-        withdraw = float(cols[2]) if cols[2] else 0.0
-        bonus = float(cols[3]) if cols[3] else 0.0
+        try:
+            deposit = float(cols[1]) if cols[1] else 0.0
+            withdraw = float(cols[2]) if cols[2] else 0.0
+            bonus = float(cols[3]) if cols[3] else 0.0
+        except ValueError:
+            continue
+
         player_username = cols[4]
-        affiliate_id = body.affiliate_id or 'AFF-1001'
+        affiliate_id = body.affiliate_id or 'AFF-1004'
 
         rows.append({
             'date': date_value,
@@ -725,6 +725,159 @@ def import_raw_data_from_csv(body: CsvImportRequest):
         create_raw_data_record(row)
 
     return {'success': True, 'imported_count': len(rows), 'rows': rows}
+
+@app.put("/api/affiliates/password")
+def update_affiliate_password(body: PasswordUpdateRequest):
+    aff = find_affiliate_by_id(body.affiliate_id)
+    if not aff:
+        raise HTTPException(status_code=404, detail="Affiliate not found")
+    aff["password"] = body.password
+    return {"success": True, "message": f"Password updated for {body.affiliate_id}"}
+
+@app.post("/api/raw-data/import-registrations")
+def import_registration_data_from_csv(body: RegistrationImportRequest):
+    if not body.csv_text or not body.csv_text.strip():
+        raise HTTPException(status_code=400, detail="CSV text is required")
+
+    rows = []
+    reader = csv.reader(body.csv_text.splitlines())
+    headers = None
+    first_row = True
+
+    for raw_cols in reader:
+        cols = [c.strip() for c in raw_cols]
+        if not any(cols):
+            continue
+        if first_row:
+            normalized = [normalize_csv_header(c) for c in cols]
+            # recognize common registration CSV headers including SignupDate and ClientId
+            header_names = {
+                'date', 'datetime', 'timestamp', 'player', 'player_username', 'username', 'to',
+                'affiliate', 'affiliate_id', 'aff', 'signupdate', 'signup_date', 'signup', 'id', 'clientid', 'client_id'
+            }
+            if any(name in normalized for name in header_names):
+                headers = normalized
+                first_row = False
+                continue
+            first_row = False
+
+        date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp', 'signupdate', 'signupdate', 'signup_date', 'signup'], 0)
+        player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username', 'clientid', 'client_id', 'id'], 1)
+        if not player_username:
+            continue
+
+        if body.affiliate_id:
+            affiliate_id = body.affiliate_id
+        else:
+            candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], 2 if len(cols) > 2 else None)
+            if not candidate and len(cols) > 3:
+                candidate = cols[-1]
+            affiliate_id = resolve_affiliate_identifier(candidate) or 'AFF-1004'
+
+        rows.append({
+            'date': date_value,
+            'affiliate_id': affiliate_id,
+            'player_username': player_username,
+            'registration_date': date_value,
+            'deposit_amount': 0.0,
+            'withdrawal_amount': 0.0,
+            'bonus_amount': 0.0,
+        })
+
+    for row in rows:
+        create_raw_data_record(row)
+
+    return {'success': True, 'imported_count': len(rows), 'rows': rows}
+
+@app.post("/api/raw-data/import-transactions")
+def import_transaction_data_from_csv(body: TransactionImportRequest):
+    if not body.csv_text or not body.csv_text.strip():
+        raise HTTPException(status_code=400, detail="CSV text is required")
+
+    rows = []
+    reader = csv.reader(body.csv_text.splitlines())
+    headers = None
+    first_row = True
+
+    for raw_cols in reader:
+        cols = [c.strip() for c in raw_cols]
+        if not any(cols):
+            continue
+
+        if first_row:
+            normalized = [normalize_csv_header(c) for c in cols]
+            header_names = {'date', 'datetime', 'timestamp', 'deposit', 'withdraw', 'withdrawal', 'bonus', 'player', 'to', 'affiliate', 'affiliate_id', 'marketing'}
+            if any(name in normalized for name in header_names):
+                headers = normalized
+                first_row = False
+                continue
+            first_row = False
+
+        date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp'], 0)
+        deposit = parse_csv_float(get_csv_value(cols, headers, ['deposit', 'deposit_amount', 'credit'], 1))
+        withdraw = parse_csv_float(get_csv_value(cols, headers, ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit'], 2))
+        bonus = parse_csv_float(get_csv_value(cols, headers, ['bonus', 'bonus_amount'], 3))
+        player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username'], 4)
+        if not player_username:
+            continue
+
+        if body.affiliate_id:
+            affiliate_id = body.affiliate_id
+        else:
+            candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], len(cols) - 1 if len(cols) > 5 else None)
+            affiliate_id = resolve_affiliate_identifier(candidate) or 'AFF-1004'
+
+        rows.append({
+            'date': date_value,
+            'affiliate_id': affiliate_id,
+            'player_username': player_username,
+            'registration_date': date_value,
+            'deposit_amount': round(deposit, 2),
+            'withdrawal_amount': round(withdraw, 2),
+            'bonus_amount': round(bonus, 2),
+        })
+
+    for row in rows:
+        create_raw_data_record(row)
+
+    return {'success': True, 'imported_count': len(rows), 'rows': rows}
+
+
+@app.post("/api/raw-data/import-rows")
+def import_rows(body: RowsImportRequest):
+    if not body.rows or len(body.rows) == 0:
+        raise HTTPException(status_code=400, detail="No rows provided")
+
+    created = []
+    for r in body.rows:
+        try:
+            date_value = r.get('date') or r.get('registration_date') or ''
+            player_username = r.get('player_username') or r.get('player') or r.get('username') or ''
+            deposit = float(r.get('deposit_amount') or r.get('deposit') or 0) if r.get('deposit_amount') is not None else 0.0
+            withdrawal = float(r.get('withdrawal_amount') or r.get('withdrawal') or 0) if r.get('withdrawal_amount') is not None else 0.0
+            bonus = float(r.get('bonus_amount') or r.get('bonus') or 0) if r.get('bonus_amount') is not None else 0.0
+
+            if body.affiliate_id:
+                affiliate_id = body.affiliate_id
+            else:
+                candidate = r.get('affiliate') or r.get('affiliate_id') or r.get('marketing') or ''
+                affiliate_id = resolve_affiliate_identifier(candidate) or 'AFF-1004'
+
+            entry = {
+                'date': date_value,
+                'affiliate_id': affiliate_id,
+                'player_username': player_username,
+                'registration_date': date_value,
+                'deposit_amount': round(deposit, 2),
+                'withdrawal_amount': round(withdrawal, 2),
+                'bonus_amount': round(bonus, 2),
+            }
+            rec = create_raw_data_record(entry)
+            created.append(rec)
+        except Exception:
+            continue
+
+    return {'success': True, 'imported_count': len(created), 'rows': created}
 
 
 def create_raw_data_record(entry: dict):
