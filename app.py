@@ -692,7 +692,8 @@ def import_raw_data_from_csv(body: CsvImportRequest):
         raise HTTPException(status_code=400, detail="CSV text is required")
 
     rows = []
-    for line in body.csv_text.splitlines():
+    errors = []
+    for line_num, line in enumerate(body.csv_text.splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
@@ -709,7 +710,21 @@ def import_raw_data_from_csv(body: CsvImportRequest):
             continue
 
         player_username = cols[4]
-        affiliate_id = body.affiliate_id or 'AFF-1004'
+        # Try to get affiliate_id: from body, or from CSV, or error
+        affiliate_id = body.affiliate_id
+        if not affiliate_id and len(cols) > 5:
+            affiliate_id = cols[5].strip() if cols[5].strip() else None
+        
+        # Resolve affiliate identifier
+        if affiliate_id:
+            resolved_id = resolve_affiliate_identifier(affiliate_id)
+            if not resolved_id:
+                errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+                continue
+            affiliate_id = resolved_id
+        else:
+            errors.append(f"Line {line_num}: No affiliate ID provided. Please specify affiliate ID in column 6 or in the request.")
+            continue
 
         rows.append({
             'date': date_value,
@@ -720,6 +735,9 @@ def import_raw_data_from_csv(body: CsvImportRequest):
             'withdrawal_amount': round(withdraw, 2),
             'bonus_amount': round(bonus, 2),
         })
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"error": "Some rows failed validation", "details": errors, "imported_count": len(rows)})
 
     for row in rows:
         create_raw_data_record(row)
@@ -740,11 +758,12 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
         raise HTTPException(status_code=400, detail="CSV text is required")
 
     rows = []
+    errors = []
     reader = csv.reader(body.csv_text.splitlines())
     headers = None
     first_row = True
 
-    for raw_cols in reader:
+    for line_num, raw_cols in enumerate(reader, start=1):
         cols = [c.strip() for c in raw_cols]
         if not any(cols):
             continue
@@ -772,7 +791,16 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
             candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], 2 if len(cols) > 2 else None)
             if not candidate and len(cols) > 3:
                 candidate = cols[-1]
-            affiliate_id = resolve_affiliate_identifier(candidate) or 'AFF-1004'
+            
+            if candidate:
+                resolved_id = resolve_affiliate_identifier(candidate)
+                if not resolved_id:
+                    errors.append(f"Line {line_num}: Affiliate '{candidate}' not found. Please create this affiliate first.")
+                    continue
+                affiliate_id = resolved_id
+            else:
+                errors.append(f"Line {line_num}: No affiliate ID found. Please specify affiliate ID in the CSV or in the request.")
+                continue
 
         rows.append({
             'date': date_value,
@@ -783,6 +811,9 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
             'withdrawal_amount': 0.0,
             'bonus_amount': 0.0,
         })
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"error": "Some rows failed validation", "details": errors, "imported_count": len(rows)})
 
     for row in rows:
         create_raw_data_record(row)
@@ -795,11 +826,12 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         raise HTTPException(status_code=400, detail="CSV text is required")
 
     rows = []
+    errors = []
     reader = csv.reader(body.csv_text.splitlines())
     headers = None
     first_row = True
 
-    for raw_cols in reader:
+    for line_num, raw_cols in enumerate(reader, start=1):
         cols = [c.strip() for c in raw_cols]
         if not any(cols):
             continue
@@ -825,7 +857,16 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
             affiliate_id = body.affiliate_id
         else:
             candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], len(cols) - 1 if len(cols) > 5 else None)
-            affiliate_id = resolve_affiliate_identifier(candidate) or 'AFF-1004'
+            
+            if candidate:
+                resolved_id = resolve_affiliate_identifier(candidate)
+                if not resolved_id:
+                    errors.append(f"Line {line_num}: Affiliate '{candidate}' not found. Please create this affiliate first.")
+                    continue
+                affiliate_id = resolved_id
+            else:
+                errors.append(f"Line {line_num}: No affiliate ID found. Please specify affiliate ID in the CSV or in the request.")
+                continue
 
         rows.append({
             'date': date_value,
@@ -836,6 +877,9 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
             'withdrawal_amount': round(withdraw, 2),
             'bonus_amount': round(bonus, 2),
         })
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"error": "Some rows failed validation", "details": errors, "imported_count": len(rows)})
 
     for row in rows:
         create_raw_data_record(row)
