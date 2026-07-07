@@ -292,11 +292,13 @@ def get_dashboard():
     active_affiliates = sum(1 for a in affiliates_db if a["status"] == "active")
     
     all_players = []
+    unique_player_usernames = set()
     for aff_id, rows in reports_db.items():
         for r in rows:
             all_players.append(r)
+            unique_player_usernames.add(r.get("player_username", "").lower())
     
-    total_players = len(all_players)
+    total_players = len(unique_player_usernames)
     total_deposits = sum(r["deposit"] for r in all_players)
     total_withdrawals = sum(r["withdrawal"] for r in all_players)
     total_bonuses = sum(r["bonus"] for r in all_players)
@@ -309,6 +311,7 @@ def get_dashboard():
     for aff in affiliates_db:
         aff_id = aff["id"]
         rows = reports_db.get(aff_id, [])
+        unique_players_aff = set(r.get("player_username", "").lower() for r in rows)
         dep = sum(r["deposit"] for r in rows)
         wd = sum(r["withdrawal"] for r in rows)
         bn = sum(r["bonus"] for r in rows)
@@ -318,7 +321,7 @@ def get_dashboard():
             "affiliate_id": aff_id,
             "first_name": aff["first_name"],
             "last_name": aff["last_name"],
-            "total_players": len(rows),
+            "total_players": len(unique_players_aff),
             "total_deposits": dep,
             "total_withdrawals": wd,
             "total_bonuses": bn,
@@ -343,10 +346,17 @@ def get_dashboard():
 def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = None, player_username: str = None, period: str = None):
     date_from, date_to = resolve_report_dates(period, date_from, date_to)
     all_reports = []
+    seen_players = set()  # Track unique player_username
+    
     for player in players_db:
         aff_id = player.get("affiliate_id")
         if affiliate_id and aff_id != affiliate_id:
             continue
+        player_name = player.get("player_username", "").lower()
+        if player_name in seen_players:
+            continue
+        seen_players.add(player_name)
+        
         aff = find_affiliate_by_id(aff_id)
         commission_percentage = aff["commission_pct"] if aff else 20
         row = {
@@ -370,14 +380,22 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
 
     for aff_id, rows in reports_db.items():
         for r in rows:
-            if any(existing["player_id"] == r.get("id") for existing in all_reports if existing.get("player_id")):
+            player_name = r.get("player_username", "").lower()
+            if player_name in seen_players:
                 continue
+            seen_players.add(player_name)
+            
             aff = find_affiliate_by_id(aff_id)
             commission_percentage = aff["commission_pct"] if aff else 20
             all_reports.append(build_report_entry(r, affiliate_id=aff_id, commission_percentage=commission_percentage))
 
     global raw_data_counter
     for idx, row in enumerate(raw_data_db, start=1):
+        player_name = row.get("player_username", "").lower()
+        if player_name in seen_players:
+            continue
+        seen_players.add(player_name)
+        
         aff = find_affiliate_by_id(row.get("affiliate_id"))
         commission_percentage = aff["commission_pct"] if aff else 20
         deposit = float(row.get("deposit_amount", 0) or 0)
@@ -621,11 +639,17 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
     affiliate_id = get_affiliate_id_from_header(authorization)
     date_from, date_to = resolve_report_dates(period, date_from, date_to)
     result = []
+    seen_players = set()  # Track unique player_username
     aff = find_affiliate_by_id(affiliate_id)
     commission_percentage = aff["commission_pct"] if aff else 20
     for player in players_db:
         if player.get("affiliate_id") != affiliate_id:
             continue
+        player_name = player.get("player_username", "").lower()
+        if player_name in seen_players:
+            continue
+        seen_players.add(player_name)
+        
         row = {
             "id": player.get("player_id"),
             "player_id": player.get("player_id"),
@@ -647,13 +671,20 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
 
     rows = reports_db.get(affiliate_id, [])
     for r in rows:
-        if any(existing["player_id"] == r.get("id") for existing in result if existing.get("player_id")):
+        player_name = r.get("player_username", "").lower()
+        if player_name in seen_players:
             continue
+        seen_players.add(player_name)
         result.append(build_report_entry(r, affiliate_id=affiliate_id, commission_percentage=commission_percentage))
 
     for row in raw_data_db:
         if row.get("affiliate_id") != affiliate_id:
             continue
+        player_name = row.get("player_username", "").lower()
+        if player_name in seen_players:
+            continue
+        seen_players.add(player_name)
+        
         deposit = float(row.get("deposit_amount", 0) or 0)
         withdrawal = float(row.get("withdrawal_amount", 0) or 0)
         bonus = float(row.get("bonus_amount", 0) or 0)
@@ -737,7 +768,8 @@ def import_raw_data_from_csv(body: CsvImportRequest):
         })
 
     if errors:
-        raise HTTPException(status_code=400, detail={"error": "Some rows failed validation", "details": errors, "imported_count": len(rows)})
+        error_msg = "❌ " + " | ".join(errors)
+        return {"success": False, "error": error_msg}
 
     for row in rows:
         create_raw_data_record(row)
@@ -759,9 +791,13 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
 
     rows = []
     errors = []
+    duplicates = []
     reader = csv.reader(body.csv_text.splitlines())
     headers = None
     first_row = True
+    
+    # Get existing player usernames
+    existing_players = set(row.get('player_username', '').lower() for row in raw_data_db if row.get('player_username'))
 
     for line_num, raw_cols in enumerate(reader, start=1):
         cols = [c.strip() for c in raw_cols]
@@ -783,6 +819,11 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
         date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp', 'signupdate', 'signupdate', 'signup_date', 'signup'], 0)
         player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username', 'clientid', 'client_id', 'id'], 1)
         if not player_username:
+            continue
+
+        # Check for duplicate player
+        if player_username.lower() in existing_players:
+            duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped (no duplicates allowed).")
             continue
 
         if body.affiliate_id:
@@ -811,14 +852,21 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
             'withdrawal_amount': 0.0,
             'bonus_amount': 0.0,
         })
+        existing_players.add(player_username.lower())
 
     if errors:
-        raise HTTPException(status_code=400, detail={"error": "Some rows failed validation", "details": errors, "imported_count": len(rows)})
+        error_msg = "❌ " + " | ".join(errors)
+        if duplicates:
+            error_msg += " ⚠️ " + " | ".join(duplicates)
+        return {"success": False, "error": error_msg}
 
     for row in rows:
         create_raw_data_record(row)
 
-    return {'success': True, 'imported_count': len(rows), 'rows': rows}
+    result = {'success': True, 'imported_count': len(rows), 'rows': rows}
+    if duplicates:
+        result['warnings'] = duplicates
+    return result
 
 @app.post("/api/raw-data/import-transactions")
 def import_transaction_data_from_csv(body: TransactionImportRequest):
@@ -827,9 +875,15 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
 
     rows = []
     errors = []
+    existing_dates = set()
     reader = csv.reader(body.csv_text.splitlines())
     headers = None
     first_row = True
+    
+    # Get all existing transaction dates
+    for entry in raw_data_db:
+        if entry.get('date'):
+            existing_dates.add(entry['date'])
 
     for line_num, raw_cols in enumerate(reader, start=1):
         cols = [c.strip() for c in raw_cols]
@@ -879,12 +933,25 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         })
 
     if errors:
-        raise HTTPException(status_code=400, detail={"error": "Some rows failed validation", "details": errors, "imported_count": len(rows)})
+        error_msg = "❌ " + " | ".join(errors)
+        return {"success": False, "error": error_msg}
+
+    # Check for existing dates and inform user
+    dates_in_import = set(row['date'] for row in rows if row['date'])
+    overlapping_dates = dates_in_import & existing_dates
+    
+    info_msg = ""
+    if overlapping_dates:
+        sorted_dates = sorted(list(overlapping_dates))
+        info_msg = f"⚠️ Existing transaction data found for dates: {', '.join(sorted_dates)}. Proceeding with import will update these entries."
 
     for row in rows:
         create_raw_data_record(row)
 
-    return {'success': True, 'imported_count': len(rows), 'rows': rows}
+    result = {'success': True, 'imported_count': len(rows), 'rows': rows}
+    if info_msg:
+        result['info'] = info_msg
+    return result
 
 
 @app.post("/api/raw-data/import-rows")
