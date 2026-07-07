@@ -826,22 +826,12 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
             duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped (no duplicates allowed).")
             continue
 
-        if body.affiliate_id:
-            affiliate_id = body.affiliate_id
-        else:
-            candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], 2 if len(cols) > 2 else None)
-            if not candidate and len(cols) > 3:
-                candidate = cols[-1]
-            
-            if candidate:
-                resolved_id = resolve_affiliate_identifier(candidate)
-                if not resolved_id:
-                    errors.append(f"Line {line_num}: Affiliate '{candidate}' not found. Please create this affiliate first.")
-                    continue
-                affiliate_id = resolved_id
-            else:
-                errors.append(f"Line {line_num}: No affiliate ID found. Please specify affiliate ID in the CSV or in the request.")
-                continue
+        # Use affiliate_id from request body (required for registration import)
+        if not body.affiliate_id:
+            errors.append(f"Line {line_num}: Affiliate ID required in request. Please specify affiliate_id in the import request.")
+            continue
+        
+        affiliate_id = body.affiliate_id
 
         rows.append({
             'date': date_value,
@@ -945,7 +935,30 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         sorted_dates = sorted(list(overlapping_dates))
         info_msg = f"⚠️ Existing transaction data found for dates: {', '.join(sorted_dates)}. Proceeding with import will update these entries."
 
+    # Auto-create player registrations for new players
     for row in rows:
+        player_username = row['player_username']
+        affiliate_id = row['affiliate_id']
+        registration_date = row['registration_date']
+        
+        # Check if player already exists in players_db
+        existing_player = next((p for p in players_db if p.get('player_username', '').lower() == player_username.lower() and p.get('affiliate_id') == affiliate_id), None)
+        if not existing_player:
+            # Create new player registration
+            players_db.append({
+                'player_id': f"P-{len(players_db) + 1}",
+                'player_username': player_username,
+                'affiliate_id': affiliate_id,
+                'registration_date': registration_date,
+                'ftd_date': registration_date,
+                'deposit_total': 0.0,
+                'deposit_count': 0,
+                'withdrawal_total': 0.0,
+                'bonus_total': 0.0,
+                'revenue': 0.0,
+                'commission': 0.0,
+            })
+        
         create_raw_data_record(row)
 
     result = {'success': True, 'imported_count': len(rows), 'rows': rows}
