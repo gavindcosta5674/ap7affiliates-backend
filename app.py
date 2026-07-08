@@ -7,6 +7,13 @@ from urllib.parse import quote
 import csv
 import uvicorn
 import secrets
+import io
+
+try:
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
 
 # ── FastAPI Setup ──────────────────────────────────────────────────────────
 app = FastAPI(title="Master Affiliate Panel API")
@@ -105,6 +112,26 @@ def parse_csv_float(value: str) -> float:
         return 0.0
 
 
+def convert_xlsx_to_csv(file_bytes: bytes) -> str:
+    """Convert XLSX file bytes to CSV string format"""
+    if not OPENPYXL_AVAILABLE:
+        raise HTTPException(status_code=400, detail="XLSX support not available. Please upload CSV file or contact support.")
+    
+    try:
+        workbook = load_workbook(io.BytesIO(file_bytes))
+        worksheet = workbook.active
+        
+        csv_lines = []
+        for row in worksheet.iter_rows(values_only=True):
+            # Convert row values to strings, handling None values
+            row_str = ','.join(str(cell) if cell is not None else '' for cell in row)
+            csv_lines.append(row_str)
+        
+        return '\n'.join(csv_lines)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse XLSX file: {str(e)}")
+
+
 def find_affiliate_by_id(aid: str):
     for aff in affiliates_db:
         if aff["id"] == aid:
@@ -199,6 +226,12 @@ class RawDataEntry(BaseModel):
 
 class CsvImportRequest(BaseModel):
     csv_text: str
+    affiliate_id: Optional[str] = None
+
+class FileImportRequest(BaseModel):
+    """Support both CSV text and base64-encoded XLSX files"""
+    file_content: Optional[str] = None  # CSV text or base64 XLSX
+    file_type: Optional[str] = "csv"  # 'csv' or 'xlsx'
     affiliate_id: Optional[str] = None
 
 class PasswordUpdateRequest(BaseModel):
@@ -721,6 +754,10 @@ def get_raw_data():
 def import_raw_data_from_csv(body: CsvImportRequest):
     if not body.csv_text or not body.csv_text.strip():
         raise HTTPException(status_code=400, detail="CSV text is required")
+    
+    # Affiliate ID is REQUIRED from request body
+    if not body.affiliate_id:
+        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
 
     rows = []
     errors = []
@@ -741,21 +778,14 @@ def import_raw_data_from_csv(body: CsvImportRequest):
             continue
 
         player_username = cols[4]
-        # Try to get affiliate_id: from body, or from CSV, or error
-        affiliate_id = body.affiliate_id
-        if not affiliate_id and len(cols) > 5:
-            affiliate_id = cols[5].strip() if cols[5].strip() else None
         
-        # Resolve affiliate identifier
-        if affiliate_id:
-            resolved_id = resolve_affiliate_identifier(affiliate_id)
-            if not resolved_id:
-                errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
-                continue
-            affiliate_id = resolved_id
-        else:
-            errors.append(f"Line {line_num}: No affiliate ID provided. Please specify affiliate ID in column 6 or in the request.")
+        # Use affiliate_id from request body
+        affiliate_id = body.affiliate_id
+        resolved_id = resolve_affiliate_identifier(affiliate_id)
+        if not resolved_id:
+            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
             continue
+        affiliate_id = resolved_id
 
         rows.append({
             'date': date_value,
@@ -788,6 +818,10 @@ def update_affiliate_password(body: PasswordUpdateRequest):
 def import_registration_data_from_csv(body: RegistrationImportRequest):
     if not body.csv_text or not body.csv_text.strip():
         raise HTTPException(status_code=400, detail="CSV text is required")
+    
+    # Affiliate ID is REQUIRED from request body
+    if not body.affiliate_id:
+        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
 
     rows = []
     errors = []
@@ -826,12 +860,13 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
             duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped (no duplicates allowed).")
             continue
 
-        # Use affiliate_id from request body (required for registration import)
-        if not body.affiliate_id:
-            errors.append(f"Line {line_num}: Affiliate ID required in request. Please specify affiliate_id in the import request.")
-            continue
-        
+        # Use affiliate_id from request body
         affiliate_id = body.affiliate_id
+        resolved_id = resolve_affiliate_identifier(affiliate_id)
+        if not resolved_id:
+            errors.append(f"Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+            continue
+        affiliate_id = resolved_id
 
         rows.append({
             'date': date_value,
@@ -862,6 +897,10 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
 def import_transaction_data_from_csv(body: TransactionImportRequest):
     if not body.csv_text or not body.csv_text.strip():
         raise HTTPException(status_code=400, detail="CSV text is required")
+    
+    # Affiliate ID is REQUIRED from request body
+    if not body.affiliate_id:
+        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
 
     rows = []
     errors = []
@@ -897,20 +936,13 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         if not player_username:
             continue
 
-        if body.affiliate_id:
-            affiliate_id = body.affiliate_id
-        else:
-            candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], len(cols) - 1 if len(cols) > 5 else None)
-            
-            if candidate:
-                resolved_id = resolve_affiliate_identifier(candidate)
-                if not resolved_id:
-                    errors.append(f"Line {line_num}: Affiliate '{candidate}' not found. Please create this affiliate first.")
-                    continue
-                affiliate_id = resolved_id
-            else:
-                errors.append(f"Line {line_num}: No affiliate ID found. Please specify affiliate ID in the CSV or in the request.")
-                continue
+        # Use affiliate_id from request body
+        affiliate_id = body.affiliate_id
+        resolved_id = resolve_affiliate_identifier(affiliate_id)
+        if not resolved_id:
+            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+            continue
+        affiliate_id = resolved_id
 
         rows.append({
             'date': date_value,
@@ -945,6 +977,121 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         existing_player = next((p for p in players_db if p.get('player_username', '').lower() == player_username.lower() and p.get('affiliate_id') == affiliate_id), None)
         if not existing_player:
             # Create new player registration
+            players_db.append({
+                'player_id': f"P-{len(players_db) + 1}",
+                'player_username': player_username,
+                'affiliate_id': affiliate_id,
+                'registration_date': registration_date,
+                'ftd_date': registration_date,
+                'deposit_total': 0.0,
+                'deposit_count': 0,
+                'withdrawal_total': 0.0,
+                'bonus_total': 0.0,
+                'revenue': 0.0,
+                'commission': 0.0,
+            })
+        
+        create_raw_data_record(row)
+
+    result = {'success': True, 'imported_count': len(rows), 'rows': rows}
+    if info_msg:
+        result['info'] = info_msg
+    return result
+
+
+@app.post("/api/raw-data/import-file")
+def import_file_universal(body: FileImportRequest):
+    """Universal import endpoint that handles both CSV and XLSX files"""
+    if not body.file_content or not body.file_content.strip():
+        raise HTTPException(status_code=400, detail="file_content is required")
+    
+    if not body.affiliate_id:
+        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
+
+    # Convert file content to CSV text
+    csv_text = body.file_content
+    
+    if body.file_type and body.file_type.lower() == 'xlsx':
+        try:
+            import base64
+            file_bytes = base64.b64decode(body.file_content)
+            csv_text = convert_xlsx_to_csv(file_bytes)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to process XLSX file: {str(e)}")
+    
+    # Process as CSV
+    rows = []
+    errors = []
+    existing_dates = set()
+    reader = csv.reader(csv_text.splitlines())
+    headers = None
+    first_row = True
+    
+    # Get all existing transaction dates
+    for entry in raw_data_db:
+        if entry.get('date'):
+            existing_dates.add(entry['date'])
+
+    for line_num, raw_cols in enumerate(reader, start=1):
+        cols = [c.strip() for c in raw_cols]
+        if not any(cols):
+            continue
+
+        if first_row:
+            normalized = [normalize_csv_header(c) for c in cols]
+            header_names = {'date', 'datetime', 'timestamp', 'deposit', 'withdraw', 'withdrawal', 'bonus', 'player', 'to', 'affiliate', 'affiliate_id', 'marketing'}
+            if any(name in normalized for name in header_names):
+                headers = normalized
+                first_row = False
+                continue
+            first_row = False
+
+        date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp'], 0)
+        deposit = parse_csv_float(get_csv_value(cols, headers, ['deposit', 'deposit_amount', 'credit'], 1))
+        withdraw = parse_csv_float(get_csv_value(cols, headers, ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit'], 2))
+        bonus = parse_csv_float(get_csv_value(cols, headers, ['bonus', 'bonus_amount'], 3))
+        player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username'], 4)
+        if not player_username:
+            continue
+
+        affiliate_id = body.affiliate_id
+        resolved_id = resolve_affiliate_identifier(affiliate_id)
+        if not resolved_id:
+            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+            continue
+        affiliate_id = resolved_id
+
+        rows.append({
+            'date': date_value,
+            'affiliate_id': affiliate_id,
+            'player_username': player_username,
+            'registration_date': date_value,
+            'deposit_amount': round(deposit, 2),
+            'withdrawal_amount': round(withdraw, 2),
+            'bonus_amount': round(bonus, 2),
+        })
+
+    if errors:
+        error_msg = "❌ " + " | ".join(errors)
+        return {"success": False, "error": error_msg}
+
+    # Check for existing dates
+    dates_in_import = set(row['date'] for row in rows if row['date'])
+    overlapping_dates = dates_in_import & existing_dates
+    
+    info_msg = ""
+    if overlapping_dates:
+        sorted_dates = sorted(list(overlapping_dates))
+        info_msg = f"⚠️ Existing transaction data found for dates: {', '.join(sorted_dates)}. Proceeding with import will update these entries."
+
+    # Auto-create player registrations
+    for row in rows:
+        player_username = row['player_username']
+        affiliate_id = row['affiliate_id']
+        registration_date = row['registration_date']
+        
+        existing_player = next((p for p in players_db if p.get('player_username', '').lower() == player_username.lower() and p.get('affiliate_id') == affiliate_id), None)
+        if not existing_player:
             players_db.append({
                 'player_id': f"P-{len(players_db) + 1}",
                 'player_username': player_username,
