@@ -351,15 +351,41 @@ def get_dashboard():
     
     all_players = []
     unique_player_usernames = set()
+    
+    # Count from reports_db
     for aff_id, rows in reports_db.items():
         for r in rows:
             all_players.append(r)
             unique_player_usernames.add(r.get("player_username", "").lower())
     
+    # Count from raw_data_db (imported data)
+    for row in raw_data_db:
+        player_name = row.get("player_username", "").lower()
+        if player_name and player_name not in unique_player_usernames:
+            unique_player_usernames.add(player_name)
+            all_players.append({
+                "player_username": row.get("player_username", ""),
+                "deposit": float(row.get("deposit_amount", 0) or 0),
+                "withdrawal": float(row.get("withdrawal_amount", 0) or 0),
+                "bonus": float(row.get("bonus_amount", 0) or 0),
+            })
+    
+    # Count from players_db
+    for player in players_db:
+        player_name = player.get("player_username", "").lower()
+        if player_name and player_name not in unique_player_usernames:
+            unique_player_usernames.add(player_name)
+            all_players.append({
+                "player_username": player.get("player_username", ""),
+                "deposit": float(player.get("deposit_total", 0) or 0),
+                "withdrawal": float(player.get("withdrawal_total", 0) or 0),
+                "bonus": float(player.get("bonus_total", 0) or 0),
+            })
+    
     total_players = len(unique_player_usernames)
-    total_deposits = sum(r["deposit"] for r in all_players)
-    total_withdrawals = sum(r["withdrawal"] for r in all_players)
-    total_bonuses = sum(r["bonus"] for r in all_players)
+    total_deposits = sum(r.get("deposit", 0) for r in all_players)
+    total_withdrawals = sum(r.get("withdrawal", 0) for r in all_players)
+    total_bonuses = sum(r.get("bonus", 0) for r in all_players)
     total_revenue = round(total_deposits - total_withdrawals - total_bonuses, 2)
     
     avg_pct = sum(a["commission_pct"] for a in affiliates_db) / len(affiliates_db) if affiliates_db else 20
@@ -368,11 +394,37 @@ def get_dashboard():
     recent = []
     for aff in affiliates_db:
         aff_id = aff["id"]
+        unique_players_aff = set()
+        dep = 0
+        wd = 0
+        bn = 0
+        
+        # From reports_db
         rows = reports_db.get(aff_id, [])
-        unique_players_aff = set(r.get("player_username", "").lower() for r in rows)
-        dep = sum(r["deposit"] for r in rows)
-        wd = sum(r["withdrawal"] for r in rows)
-        bn = sum(r["bonus"] for r in rows)
+        for r in rows:
+            unique_players_aff.add(r.get("player_username", "").lower())
+            dep += r.get("deposit", 0)
+            wd += r.get("withdrawal", 0)
+            bn += r.get("bonus", 0)
+        
+        # From raw_data_db
+        for row in raw_data_db:
+            if row.get("affiliate_id") == aff_id:
+                player_name = row.get("player_username", "").lower()
+                unique_players_aff.add(player_name)
+                dep += float(row.get("deposit_amount", 0) or 0)
+                wd += float(row.get("withdrawal_amount", 0) or 0)
+                bn += float(row.get("bonus_amount", 0) or 0)
+        
+        # From players_db
+        for player in players_db:
+            if player.get("affiliate_id") == aff_id:
+                player_name = player.get("player_username", "").lower()
+                unique_players_aff.add(player_name)
+                dep += float(player.get("deposit_total", 0) or 0)
+                wd += float(player.get("withdrawal_total", 0) or 0)
+                bn += float(player.get("bonus_total", 0) or 0)
+        
         rev = round(dep - wd - bn, 2)
         comm = round(rev * aff["commission_pct"] / 100, 2)
         recent.append({
