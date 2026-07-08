@@ -758,31 +758,68 @@ def import_raw_data_from_csv(body: CsvImportRequest):
 
     rows = []
     errors = []
-    for line_num, line in enumerate(body.csv_text.splitlines(), start=1):
-        line = line.strip()
-        if not line:
-            continue
-        cols = [c.strip() for c in next(csv.reader([line]))]
-        if len(cols) < 5:
-            continue
-
-        date_value = cols[0]
-        try:
-            deposit = float(cols[1]) if cols[1] else 0.0
-            withdraw = float(cols[2]) if cols[2] else 0.0
-            bonus = float(cols[3]) if cols[3] else 0.0
-        except ValueError:
+    reader = csv.reader(body.csv_text.splitlines())
+    headers = None
+    first_row = True
+    
+    for line_num, raw_cols in enumerate(reader, start=1):
+        cols = [c.strip() for c in raw_cols]
+        if not any(cols):
             continue
 
-        player_username = cols[4]
+        # Parse headers
+        if first_row:
+            normalized = [normalize_csv_header(c) for c in cols]
+            # Check if this is a transaction or registration format
+            if any(name in normalized for name in ['datetime', 'deposit', 'withdraw', 'bonus', 'to']):
+                headers = normalized
+                first_row = False
+                continue
+            elif any(name in normalized for name in ['sno', 'clientid', 'signupdate', 'affiliate_id']):
+                headers = normalized
+                first_row = False
+                continue
+            first_row = False
+
+        # Detect file type from available columns
+        is_transaction = headers and ('deposit' in headers or 'datetime' in headers)
+        is_registration = headers and ('sno' in headers or 'clientid' in headers)
         
-        # Get affiliate_id: from request body first, then CSV column 6
-        affiliate_id = body.affiliate_id
-        if not affiliate_id and len(cols) > 5:
-            affiliate_id = cols[5].strip() if cols[5].strip() else None
+        if is_transaction:
+            # Transaction format: DateTime, Deposit, Withdraw, Bonus, remark, To, Affiliate
+            date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp'], 0)
+            deposit = parse_csv_float(get_csv_value(cols, headers, ['deposit', 'deposit_amount', 'credit'], 1))
+            withdraw = parse_csv_float(get_csv_value(cols, headers, ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit'], 2))
+            bonus = parse_csv_float(get_csv_value(cols, headers, ['bonus', 'bonus_amount'], 3))
+            player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username'], 5)
+            
+            # Get affiliate: from request body, or column 6 (Affiliate name), or last column
+            affiliate_id = body.affiliate_id
+            if not affiliate_id and len(cols) > 6:
+                affiliate_candidate = cols[6].strip()  # Column 7 (0-indexed as 6)
+                if affiliate_candidate:
+                    affiliate_id = affiliate_candidate
+            
+        else:
+            # Registration format: Sno, ClientId, PhoneNo, SignupDate, Affiliate ID, Affiliate Username
+            date_value = get_csv_value(cols, headers, ['signupdate', 'signup_date', 'date', 'datetime'], 3)
+            player_username = get_csv_value(cols, headers, ['clientid', 'client_id', 'player_username', 'username'], 1)
+            deposit = 0.0
+            withdraw = 0.0
+            bonus = 0.0
+            
+            # Get affiliate ID from column 4 (0-indexed)
+            affiliate_id = body.affiliate_id
+            if not affiliate_id and len(cols) > 4:
+                affiliate_id_candidate = cols[4].strip()
+                if affiliate_id_candidate:
+                    affiliate_id = affiliate_id_candidate
         
+        if not player_username:
+            continue
+
         if not affiliate_id:
-            errors.append(f"Line {line_num}: No affiliate ID. Provide in request body or column 6 of CSV.")
+            errors.append(f"Line {line_num}: No affiliate ID found.")
             continue
         
         resolved_id = resolve_affiliate_identifier(affiliate_id)
@@ -837,12 +874,13 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
         cols = [c.strip() for c in raw_cols]
         if not any(cols):
             continue
+        
         if first_row:
             normalized = [normalize_csv_header(c) for c in cols]
-            # recognize common registration CSV headers including SignupDate and ClientId
             header_names = {
+                'sno', 'clientid', 'phoneno', 'signupdate', 'affiliate_id', 'affiliate_username',
                 'date', 'datetime', 'timestamp', 'player', 'player_username', 'username', 'to',
-                'affiliate', 'affiliate_id', 'aff', 'signupdate', 'signup_date', 'signup', 'id', 'clientid', 'client_id'
+                'affiliate', 'aff'
             }
             if any(name in normalized for name in header_names):
                 headers = normalized
@@ -850,8 +888,15 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
                 continue
             first_row = False
 
-        date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp', 'signupdate', 'signupdate', 'signup_date', 'signup'], 0)
-        player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username', 'clientid', 'client_id', 'id'], 1)
+        # Map columns: Sno, ClientId, PhoneNo, SignupDate, Affiliate ID, Affiliate Username
+        # Or: DateTime, Deposit, Withdraw, Bonus, remark, To, Affiliate
+        sno = get_csv_value(cols, headers, ['sno', 'serial', 'id'], 0)
+        player_username = get_csv_value(cols, headers, ['clientid', 'client_id', 'player_username', 'username', 'to'], 1)
+        phone_or_deposit = get_csv_value(cols, headers, ['phoneno', 'phone', 'deposit'], 2)
+        signup_or_withdraw = get_csv_value(cols, headers, ['signupdate', 'signup_date', 'date', 'withdraw'], 3)
+        affiliate_id_or_bonus = get_csv_value(cols, headers, ['affiliate_id', 'aff_id', 'bonus'], 4)
+        affiliate_username = get_csv_value(cols, headers, ['affiliate_username', 'affiliate', 'aff'], 5)
+        
         if not player_username:
             continue
 
@@ -860,10 +905,24 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
             duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped.")
             continue
 
-        # Get affiliate_id: from request body first
-        affiliate_id = body.affiliate_id
+        # Determine which format: Registration or Transaction
+        is_registration = headers and any(name in headers for name in ['sno', 'clientid', 'phoneno'])
+        
+        if is_registration:
+            # Registration format
+            date_value = signup_or_withdraw  # SignupDate column
+            affiliate_id = affiliate_id_or_bonus  # Affiliate ID column
+        else:
+            # Fallback for transaction-like format
+            date_value = signup_or_withdraw
+            affiliate_id = affiliate_id_or_bonus if affiliate_id_or_bonus else affiliate_username
+
+        # Use request body affiliate_id if provided
+        if body.affiliate_id:
+            affiliate_id = body.affiliate_id
+        
         if not affiliate_id:
-            errors.append(f"Line {line_num}: Affiliate ID required in request body.")
+            errors.append(f"Line {line_num}: Affiliate ID required.")
             continue
         
         resolved_id = resolve_affiliate_identifier(affiliate_id)
@@ -921,27 +980,30 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
 
         if first_row:
             normalized = [normalize_csv_header(c) for c in cols]
-            header_names = {'date', 'datetime', 'timestamp', 'deposit', 'withdraw', 'withdrawal', 'bonus', 'player', 'to', 'affiliate', 'affiliate_id', 'marketing'}
+            header_names = {'datetime', 'date_time', 'date', 'timestamp', 'deposit', 'withdraw', 'withdrawal', 'bonus', 'player', 'to', 'affiliate', 'affiliate_id', 'marketing', 'remark'}
             if any(name in normalized for name in header_names):
                 headers = normalized
                 first_row = False
                 continue
             first_row = False
 
+        # Map columns: DateTime, Deposit, Withdraw, Bonus, remark, To, Affiliate
         date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp'], 0)
         deposit = parse_csv_float(get_csv_value(cols, headers, ['deposit', 'deposit_amount', 'credit'], 1))
         withdraw = parse_csv_float(get_csv_value(cols, headers, ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit'], 2))
         bonus = parse_csv_float(get_csv_value(cols, headers, ['bonus', 'bonus_amount'], 3))
-        player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username'], 4)
+        remark = get_csv_value(cols, headers, ['remark', 'remark', 'note'], 4)
+        player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username'], 5)
+        
         if not player_username:
             continue
 
-        # Get affiliate_id: from request body first, then CSV
+        # Get affiliate: from request body, or column 6 (Affiliate name/username), or last column
         affiliate_id = body.affiliate_id
-        if not affiliate_id:
-            candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], len(cols) - 1 if len(cols) > 5 else None)
-            if candidate:
-                affiliate_id = candidate
+        if not affiliate_id and len(cols) > 6:
+            affiliate_candidate = cols[6].strip()  # Column 7 (Affiliate)
+            if affiliate_candidate:
+                affiliate_id = affiliate_candidate
         
         if not affiliate_id:
             errors.append(f"Line {line_num}: No affiliate ID found.")
