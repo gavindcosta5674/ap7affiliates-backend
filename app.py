@@ -787,6 +787,28 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
 def get_raw_data():
     return raw_data_db
 
+@app.delete("/api/admin/clear-all-data")
+def admin_clear_all_data(authorization: Optional[str] = Header(None, alias="Authorization")):
+    """Admin only: Clear all imported data (keeps default affiliate)"""
+    token = authorization
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:]
+    
+    if not is_admin_token(token):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    global raw_data_db, players_db, reports_db
+    
+    raw_data_db.clear()
+    players_db.clear()
+    reports_db.clear()
+    
+    return {
+        "success": True, 
+        "message": "All data cleared successfully",
+        "note": "Default affiliate (AFF-1001) remains intact"
+    }
+
 
 @app.post("/api/raw-data/import-csv")
 def import_raw_data_from_csv(body: CsvImportRequest):
@@ -984,6 +1006,56 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
     if duplicates:
         result['warnings'] = duplicates
     return result
+
+@app.post("/api/raw-data/import-registrations-force")
+def import_registrations_force(body: RegistrationImportRequest):
+    """Force import registrations, ignoring duplicates"""
+    if not body.csv_text or not body.csv_text.strip():
+        raise HTTPException(status_code=400, detail="CSV text is required")
+
+    rows = []
+    reader = csv.reader(body.csv_text.splitlines())
+    headers = None
+    first_row = True
+    
+    for line_num, raw_cols in enumerate(reader, start=1):
+        cols = [c.strip() for c in raw_cols]
+        if not any(cols):
+            continue
+        
+        if first_row:
+            normalized = [normalize_csv_header(c) for c in cols]
+            headers = normalized
+            first_row = False
+            continue
+
+        # Extract values - Registration format
+        date_value = get_csv_value(cols, headers, ['signupdate', 'signup_date', 'date'], 3)
+        player_username = get_csv_value(cols, headers, ['clientid', 'client_id', 'username'], 1)
+        
+        if not player_username:
+            continue
+
+        # Get affiliate ID
+        affiliate_id = body.affiliate_id or (cols[4].strip() if len(cols) > 4 else None)
+        if not affiliate_id:
+            affiliate_id = "AFF-1001"
+
+        rows.append({
+            'date': date_value,
+            'affiliate_id': affiliate_id,
+            'player_username': player_username,
+            'registration_date': date_value,
+            'deposit_amount': 0.0,
+            'withdrawal_amount': 0.0,
+            'bonus_amount': 0.0,
+        })
+
+    # Import all rows (no duplicate check)
+    for row in rows:
+        create_raw_data_record(row)
+
+    return {'success': True, 'imported_count': len(rows), 'rows': rows, 'message': f'Imported {len(rows)} registrations (force mode - duplicates ignored)'}
 
 @app.post("/api/raw-data/import-transactions")
 def import_transaction_data_from_csv(body: TransactionImportRequest):
