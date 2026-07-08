@@ -8,6 +8,7 @@ import csv
 import uvicorn
 import secrets
 import io
+import base64
 
 try:
     from openpyxl import load_workbook
@@ -754,10 +755,6 @@ def get_raw_data():
 def import_raw_data_from_csv(body: CsvImportRequest):
     if not body.csv_text or not body.csv_text.strip():
         raise HTTPException(status_code=400, detail="CSV text is required")
-    
-    # Affiliate ID is REQUIRED from request body
-    if not body.affiliate_id:
-        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
 
     rows = []
     errors = []
@@ -779,11 +776,18 @@ def import_raw_data_from_csv(body: CsvImportRequest):
 
         player_username = cols[4]
         
-        # Use affiliate_id from request body
+        # Get affiliate_id: from request body first, then CSV column 6
         affiliate_id = body.affiliate_id
+        if not affiliate_id and len(cols) > 5:
+            affiliate_id = cols[5].strip() if cols[5].strip() else None
+        
+        if not affiliate_id:
+            errors.append(f"Line {line_num}: No affiliate ID. Provide in request body or column 6 of CSV.")
+            continue
+        
         resolved_id = resolve_affiliate_identifier(affiliate_id)
         if not resolved_id:
-            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found.")
             continue
         affiliate_id = resolved_id
 
@@ -818,10 +822,6 @@ def update_affiliate_password(body: PasswordUpdateRequest):
 def import_registration_data_from_csv(body: RegistrationImportRequest):
     if not body.csv_text or not body.csv_text.strip():
         raise HTTPException(status_code=400, detail="CSV text is required")
-    
-    # Affiliate ID is REQUIRED from request body
-    if not body.affiliate_id:
-        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
 
     rows = []
     errors = []
@@ -857,14 +857,18 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
 
         # Check for duplicate player
         if player_username.lower() in existing_players:
-            duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped (no duplicates allowed).")
+            duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped.")
             continue
 
-        # Use affiliate_id from request body
+        # Get affiliate_id: from request body first
         affiliate_id = body.affiliate_id
+        if not affiliate_id:
+            errors.append(f"Line {line_num}: Affiliate ID required in request body.")
+            continue
+        
         resolved_id = resolve_affiliate_identifier(affiliate_id)
         if not resolved_id:
-            errors.append(f"Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+            errors.append(f"Affiliate '{affiliate_id}' not found.")
             continue
         affiliate_id = resolved_id
 
@@ -897,10 +901,6 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
 def import_transaction_data_from_csv(body: TransactionImportRequest):
     if not body.csv_text or not body.csv_text.strip():
         raise HTTPException(status_code=400, detail="CSV text is required")
-    
-    # Affiliate ID is REQUIRED from request body
-    if not body.affiliate_id:
-        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
 
     rows = []
     errors = []
@@ -936,11 +936,20 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         if not player_username:
             continue
 
-        # Use affiliate_id from request body
+        # Get affiliate_id: from request body first, then CSV
         affiliate_id = body.affiliate_id
+        if not affiliate_id:
+            candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], len(cols) - 1 if len(cols) > 5 else None)
+            if candidate:
+                affiliate_id = candidate
+        
+        if not affiliate_id:
+            errors.append(f"Line {line_num}: No affiliate ID found.")
+            continue
+        
         resolved_id = resolve_affiliate_identifier(affiliate_id)
         if not resolved_id:
-            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found.")
             continue
         affiliate_id = resolved_id
 
@@ -1004,9 +1013,6 @@ def import_file_universal(body: FileImportRequest):
     """Universal import endpoint that handles both CSV and XLSX files"""
     if not body.file_content or not body.file_content.strip():
         raise HTTPException(status_code=400, detail="file_content is required")
-    
-    if not body.affiliate_id:
-        raise HTTPException(status_code=400, detail="affiliate_id is required in request body")
 
     # Convert file content to CSV text
     csv_text = body.file_content
@@ -1054,10 +1060,20 @@ def import_file_universal(body: FileImportRequest):
         if not player_username:
             continue
 
+        # Get affiliate_id: from request body first, then CSV
         affiliate_id = body.affiliate_id
+        if not affiliate_id:
+            candidate = get_csv_value(cols, headers, ['affiliate', 'affiliate_id', 'aff', 'marketing', 'source'], len(cols) - 1 if len(cols) > 5 else None)
+            if candidate:
+                affiliate_id = candidate
+        
+        if not affiliate_id:
+            errors.append(f"Line {line_num}: No affiliate ID found.")
+            continue
+        
         resolved_id = resolve_affiliate_identifier(affiliate_id)
         if not resolved_id:
-            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found. Please create this affiliate first.")
+            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found.")
             continue
         affiliate_id = resolved_id
 
