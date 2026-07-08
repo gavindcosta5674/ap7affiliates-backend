@@ -819,14 +819,7 @@ def import_raw_data_from_csv(body: CsvImportRequest):
             continue
 
         if not affiliate_id:
-            errors.append(f"Line {line_num}: No affiliate ID found.")
             continue
-        
-        resolved_id = resolve_affiliate_identifier(affiliate_id)
-        if not resolved_id:
-            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found.")
-            continue
-        affiliate_id = resolved_id
 
         rows.append({
             'date': date_value,
@@ -922,14 +915,11 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
             affiliate_id = body.affiliate_id
         
         if not affiliate_id:
-            errors.append(f"Line {line_num}: Affiliate ID required.")
             continue
-        
-        resolved_id = resolve_affiliate_identifier(affiliate_id)
-        if not resolved_id:
-            errors.append(f"Affiliate '{affiliate_id}' not found.")
+
+        if player_username.lower() in existing_players:
+            duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped")
             continue
-        affiliate_id = resolved_id
 
         rows.append({
             'date': date_value,
@@ -1002,19 +992,10 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         affiliate_id = body.affiliate_id
         if not affiliate_id and len(cols) > 6:
             affiliate_candidate = cols[6].strip()  # Column 7 (Affiliate)
-            if affiliate_candidate:
-                affiliate_id = affiliate_candidate
         
         if not affiliate_id:
-            errors.append(f"Line {line_num}: No affiliate ID found.")
             continue
         
-        resolved_id = resolve_affiliate_identifier(affiliate_id)
-        if not resolved_id:
-            errors.append(f"Line {line_num}: Affiliate '{affiliate_id}' not found.")
-            continue
-        affiliate_id = resolved_id
-
         rows.append({
             'date': date_value,
             'affiliate_id': affiliate_id,
@@ -1024,10 +1005,6 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
             'withdrawal_amount': round(withdraw, 2),
             'bonus_amount': round(bonus, 2),
         })
-
-    if errors:
-        error_msg = "❌ " + " | ".join(errors)
-        return {"success": False, "error": error_msg}
 
     # Check for existing dates and inform user
     dates_in_import = set(row['date'] for row in rows if row['date'])
