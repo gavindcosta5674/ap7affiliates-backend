@@ -31,6 +31,30 @@ app.add_middleware(
 affiliates_db = []
 affiliate_id_counter = 1000
 
+# Initialize default affiliate
+def init_default_affiliate():
+    if not any(aff["id"] == "AFF-1001" for aff in affiliates_db):
+        affiliates_db.append({
+            "id": "AFF-1001",
+            "affiliate_id": "AFF-1001",
+            "first_name": "Marketing",
+            "last_name": "Team",
+            "username": "marketing",
+            "password": "marketing123",
+            "commission_pct": 20,
+            "commission_percentage": 20,
+            "status": "active",
+            "total_players": 0,
+            "total_deposits": 0,
+            "total_withdrawals": 0,
+            "total_bonuses": 0,
+            "revenue": 0,
+            "commission": 0,
+            "created_at": "2025-06-07 12:00:00",
+        })
+
+init_default_affiliate()
+
 # Links tracking
 links_db = []
 link_id_counter = 0
@@ -377,7 +401,16 @@ def get_dashboard():
     }
 
 @app.get("/api/reports")
-def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = None, player_username: str = None, period: str = None):
+def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = None, player_username: str = None, period: str = None, authorization: Optional[str] = Header(None, alias="Authorization")):
+    # Check if admin requesting all data
+    token = authorization
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:]
+    
+    # If admin token, allow viewing all affiliates
+    if is_admin_token(token):
+        affiliate_id = None  # Show all
+    
     date_from, date_to = resolve_report_dates(period, date_from, date_to)
     all_reports = []
     seen_players = set()  # Track unique player_username
@@ -617,6 +650,10 @@ def delete_player(id: str):
 
 SESSION_TOKENS = {}
 
+def is_admin_token(token: Optional[str]) -> bool:
+    """Check if token is for master admin (Chris9742)"""
+    return token == "master-token-chris9742"
+
 def get_affiliate_id_from_header(authorization: Optional[str] = Header(None, alias="Authorization")) -> str:
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
@@ -818,8 +855,9 @@ def import_raw_data_from_csv(body: CsvImportRequest):
         if not player_username:
             continue
 
+        # Default to AFF-1001 (Marketing) if no affiliate specified
         if not affiliate_id:
-            continue
+            affiliate_id = "AFF-1001"
 
         rows.append({
             'date': date_value,
@@ -914,8 +952,9 @@ def import_registration_data_from_csv(body: RegistrationImportRequest):
         if body.affiliate_id:
             affiliate_id = body.affiliate_id
         
+        # Default to AFF-1001 (Marketing) if no affiliate specified
         if not affiliate_id:
-            continue
+            affiliate_id = "AFF-1001"
 
         if player_username.lower() in existing_players:
             duplicates.append(f"Line {line_num}: Player '{player_username}' already registered. Skipped")
@@ -988,13 +1027,16 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         if not player_username:
             continue
 
-        # Get affiliate: from request body, or column 6 (Affiliate name/username), or last column
+        # Get affiliate: from request body, or column 6 (Affiliate name/username), or default to AFF-1001
         affiliate_id = body.affiliate_id
         if not affiliate_id and len(cols) > 6:
             affiliate_candidate = cols[6].strip()  # Column 7 (Affiliate)
+            if affiliate_candidate:
+                affiliate_id = affiliate_candidate
         
+        # Default to AFF-1001 (Marketing) if no affiliate specified
         if not affiliate_id:
-            continue
+            affiliate_id = "AFF-1001"
         
         rows.append({
             'date': date_value,
