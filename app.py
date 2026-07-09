@@ -9,6 +9,7 @@ import uvicorn
 import secrets
 import io
 import base64
+import requests
 
 try:
     from openpyxl import load_workbook
@@ -1452,6 +1453,68 @@ def delete_link(link_id: int, authorization: Optional[str] = Header(None, alias=
 def get_affiliate_links(authorization: Optional[str] = Header(None, alias="Authorization")):
     affiliate_id = get_affiliate_id_from_header(authorization)
     return [l for l in links_db if l["affiliate_id"] == affiliate_id]
+
+# ── Google Sheets Integration ──────────────────────────────────────────────
+def convert_google_sheets_url_to_csv_export(sheet_url: str) -> str:
+    """Convert Google Sheets URL to CSV export URL"""
+    import re
+    # Extract sheet ID from URL
+    # Format: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid={GID}
+    match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', sheet_url)
+    if not match:
+        raise ValueError("Invalid Google Sheets URL format")
+    
+    sheet_id = match.group(1)
+    # Extract gid (sheet number) if present, default to 0
+    gid_match = re.search(r'[#&]gid=([0-9]+)', sheet_url)
+    gid = gid_match.group(1) if gid_match else '0'
+    
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+
+@app.post("/api/raw-data/import-from-google-sheets")
+def import_from_google_sheets(body: dict):
+    """
+    Import data from Google Sheets (registrations or transactions)
+    
+    Request body:
+    {
+        "sheet_url": "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit#gid=0",
+        "data_type": "registration" or "transaction",
+        "affiliate_id": "AFF-1001" (optional)
+    }
+    """
+    sheet_url = body.get("sheet_url")
+    data_type = body.get("data_type", "registration")  # registration or transaction
+    affiliate_id = body.get("affiliate_id")
+    
+    if not sheet_url:
+        raise HTTPException(status_code=400, detail="sheet_url is required")
+    
+    try:
+        # Convert to CSV export URL and fetch
+        csv_url = convert_google_sheets_url_to_csv_export(sheet_url)
+        response = __import__('requests').get(csv_url, timeout=10)
+        response.raise_for_status()
+        csv_text = response.text
+        
+        if not csv_text.strip():
+            raise HTTPException(status_code=400, detail="Google Sheet is empty")
+        
+        # Route to appropriate importer
+        if data_type == "transaction":
+            # Import as transactions
+            payload = {"csv_text": csv_text, "affiliate_id": affiliate_id}
+            return import_raw_data_from_csv(ImportRequest(**payload))
+        else:
+            # Import as registrations (default)
+            payload = {"csv_text": csv_text, "affiliate_id": affiliate_id}
+            return import_registrations_force(RegistrationImportRequest(**payload))
+            
+    except Exception as e:
+        error_msg = str(e)
+        if "Invalid Google Sheets URL" in error_msg:
+            raise HTTPException(status_code=400, detail=error_msg)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch from Google Sheets: {error_msg}")
 
 # ── Entry Point ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
