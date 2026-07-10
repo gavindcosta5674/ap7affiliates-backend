@@ -1041,7 +1041,7 @@ def import_raw_data_from_csv(body: CsvImportRequest):
     rows = []
     errors = []
     reader = csv.reader(body.csv_text.splitlines())
-    headers = None
+    col_indices = {}
     first_row = True
     
     for line_num, raw_cols in enumerate(reader, start=1):
@@ -1049,53 +1049,40 @@ def import_raw_data_from_csv(body: CsvImportRequest):
         if not any(cols):
             continue
 
-        # Parse headers
+        # Parse headers - build flexible column mapping
         if first_row:
             normalized = [normalize_csv_header(c) for c in cols]
-            # Check if this is a transaction or registration format
-            if any(name in normalized for name in ['datetime', 'deposit', 'withdraw', 'bonus', 'to']):
-                headers = normalized
-                first_row = False
-                continue
-            elif any(name in normalized for name in ['sno', 'clientid', 'signupdate', 'affiliate_id']):
-                headers = normalized
-                first_row = False
-                continue
+            # Build flexible column index mapping
+            for idx, norm_header in enumerate(normalized):
+                if norm_header in ['datetime', 'date_time', 'date', 'timestamp']:
+                    col_indices['date'] = idx
+                elif norm_header in ['deposit', 'deposit_amount', 'credit']:
+                    col_indices['deposit'] = idx
+                elif norm_header in ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit']:
+                    col_indices['withdraw'] = idx
+                elif norm_header in ['bonus', 'bonus_amount']:
+                    col_indices['bonus'] = idx
+                elif norm_header in ['to', 'player', 'player_username', 'username']:
+                    col_indices['username'] = idx
+                elif norm_header in ['affiliate', 'affiliate_id', 'affiliate_username', 'aff']:
+                    col_indices['affiliate'] = idx
             first_row = False
-
-        # Detect file type from available columns
-        is_transaction = headers and ('deposit' in headers or 'datetime' in headers)
-        is_registration = headers and ('sno' in headers or 'clientid' in headers)
+            continue
         
-        if is_transaction:
-            # Transaction format: DateTime, Deposit, Withdraw, Bonus, remark, To, Affiliate
-            date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp'], 0)
-            deposit = parse_csv_float(get_csv_value(cols, headers, ['deposit', 'deposit_amount', 'credit'], 1))
-            withdraw = parse_csv_float(get_csv_value(cols, headers, ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit'], 2))
-            bonus = parse_csv_float(get_csv_value(cols, headers, ['bonus', 'bonus_amount'], 3))
-            player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username'], 5)
+        if is_transaction := any(k in col_indices for k in ['deposit', 'date']):
+            # Transaction format: Extract using flexible mapping
+            date_value = cols[col_indices.get('date', 0)].strip() if 'date' in col_indices else (cols[0].strip() if cols else '')
+            deposit = parse_csv_float(cols[col_indices.get('deposit', 4)].strip() if 'deposit' in col_indices else (cols[4] if len(cols) > 4 else '0'))
+            withdraw = parse_csv_float(cols[col_indices.get('withdraw', 5)].strip() if 'withdraw' in col_indices else (cols[5] if len(cols) > 5 else '0'))
+            bonus = parse_csv_float(cols[col_indices.get('bonus', 6)].strip() if 'bonus' in col_indices else (cols[6] if len(cols) > 6 else '0'))
+            player_username = cols[col_indices.get('username', 2)].strip() if 'username' in col_indices else (cols[2].strip() if len(cols) > 2 else '')
             
-            # Get affiliate: from request body, or column 6 (Affiliate name), or last column
+            # Get affiliate: from request body, or from mapped column, or from column 1
             affiliate_id = body.affiliate_id
-            if not affiliate_id and len(cols) > 6:
-                affiliate_candidate = cols[6].strip()  # Column 7 (0-indexed as 6)
+            if not affiliate_id and 'affiliate' in col_indices:
+                affiliate_candidate = cols[col_indices.get('affiliate')].strip()
                 if affiliate_candidate:
                     affiliate_id = affiliate_candidate
-            
-        else:
-            # Registration format: Sno, ClientId, PhoneNo, SignupDate, Affiliate ID, Affiliate Username
-            date_value = get_csv_value(cols, headers, ['signupdate', 'signup_date', 'date', 'datetime'], 3)
-            player_username = get_csv_value(cols, headers, ['clientid', 'client_id', 'player_username', 'username'], 1)
-            deposit = 0.0
-            withdraw = 0.0
-            bonus = 0.0
-            
-            # Get affiliate ID from column 4 (0-indexed)
-            affiliate_id = body.affiliate_id
-            if not affiliate_id and len(cols) > 4:
-                affiliate_id_candidate = cols[4].strip()
-                if affiliate_id_candidate:
-                    affiliate_id = affiliate_id_candidate
         
         if not player_username:
             continue
