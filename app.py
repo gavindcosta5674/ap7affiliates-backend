@@ -1520,7 +1520,7 @@ def import_from_google_sheets(body: dict):
         if data_type == "transaction":
             # Import as transactions
             payload = {"csv_text": csv_text, "affiliate_id": affiliate_id}
-            return import_raw_data_from_csv(ImportRequest(**payload))
+            return import_transaction_data_from_csv(TransactionImportRequest(**payload))
         else:
             # Import as registrations (default)
             payload = {"csv_text": csv_text, "affiliate_id": affiliate_id}
