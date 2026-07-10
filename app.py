@@ -1121,6 +1121,7 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
     reader = csv.reader(body.csv_text.splitlines())
     headers = None
     first_row = True
+    col_indices = {}  # Map column names to indices
     
     # Get all existing transaction dates
     for entry in raw_data_db:
@@ -1133,29 +1134,44 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
             continue
 
         if first_row:
-            normalized = [normalize_csv_header(c) for c in cols]
-            header_names = {'datetime', 'date_time', 'date', 'timestamp', 'deposit', 'withdraw', 'withdrawal', 'bonus', 'player', 'to', 'affiliate', 'affiliate_id', 'marketing', 'remark'}
-            if any(name in normalized for name in header_names):
-                headers = normalized
-                first_row = False
-                continue
+            # Build column index map by searching for header names
+            normalized_headers = [normalize_csv_header(c) for c in cols]
+            
+            # Find column indices by header name
+            for idx, norm_header in enumerate(normalized_headers):
+                if norm_header in ['datetime', 'date_time', 'date', 'timestamp']:
+                    col_indices['date'] = idx
+                elif norm_header in ['deposit', 'deposit_amount', 'credit']:
+                    col_indices['deposit'] = idx
+                elif norm_header in ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit']:
+                    col_indices['withdraw'] = idx
+                elif norm_header in ['bonus', 'bonus_amount']:
+                    col_indices['bonus'] = idx
+                elif norm_header in ['username', 'player_username', 'player', 'to']:
+                    col_indices['username'] = idx
+                elif norm_header in ['affiliate', 'affiliate_id', 'affiliate_username', 'aff']:
+                    col_indices['affiliate'] = idx
+                elif norm_header in ['remark', 'note', 'remarks']:
+                    col_indices['remark'] = idx
+            
+            headers = normalized_headers
             first_row = False
+            continue
 
-        # Map columns: DateTime, Deposit, Withdraw, Bonus, remark, To, Affiliate
-        date_value = get_csv_value(cols, headers, ['datetime', 'date_time', 'date', 'timestamp'], 0)
-        deposit = parse_csv_float(get_csv_value(cols, headers, ['deposit', 'deposit_amount', 'credit'], 1))
-        withdraw = parse_csv_float(get_csv_value(cols, headers, ['withdraw', 'withdrawal', 'withdrawal_amount', 'debit'], 2))
-        bonus = parse_csv_float(get_csv_value(cols, headers, ['bonus', 'bonus_amount'], 3))
-        remark = get_csv_value(cols, headers, ['remark', 'remark', 'note'], 4)
-        player_username = get_csv_value(cols, headers, ['to', 'player', 'player_username', 'username'], 5)
+        # Extract values using column indices (flexible order)
+        date_value = cols[col_indices['date']].strip() if 'date' in col_indices else cols[0].strip()
+        deposit = parse_csv_float(cols[col_indices['deposit']].strip() if 'deposit' in col_indices else (cols[1] if len(cols) > 1 else '0'))
+        withdraw = parse_csv_float(cols[col_indices['withdraw']].strip() if 'withdraw' in col_indices else (cols[2] if len(cols) > 2 else '0'))
+        bonus = parse_csv_float(cols[col_indices['bonus']].strip() if 'bonus' in col_indices else (cols[3] if len(cols) > 3 else '0'))
+        player_username = cols[col_indices['username']].strip() if 'username' in col_indices else (cols[4].strip() if len(cols) > 4 else '')
         
         if not player_username:
             continue
 
-        # Get affiliate: from request body, or column 6 (Affiliate name/username), or default to AFF-1001
+        # Get affiliate: from request body, or from Affiliate column, or default to AFF-1001
         affiliate_id = body.affiliate_id
-        if not affiliate_id and len(cols) > 6:
-            affiliate_candidate = cols[6].strip()  # Column 7 (Affiliate)
+        if not affiliate_id and 'affiliate' in col_indices:
+            affiliate_candidate = cols[col_indices['affiliate']].strip()
             if affiliate_candidate:
                 affiliate_id = affiliate_candidate
         
