@@ -1678,14 +1678,15 @@ def convert_google_sheets_url_to_csv_export(sheet_url: str) -> str:
     """Convert Google Sheets URL to CSV export URL"""
     import re
     # Extract sheet ID from URL
-    # Format: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid={GID}
+    # Format: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit?gid={GID}
     match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', sheet_url)
     if not match:
         raise ValueError("Invalid Google Sheets URL format")
     
     sheet_id = match.group(1)
     # Extract gid (sheet number) if present, default to 0
-    gid_match = re.search(r'[#&]gid=([0-9]+)', sheet_url)
+    # Look for ?gid=, #gid=, or &gid=
+    gid_match = re.search(r'[?#&]gid=([0-9]+)', sheet_url)
     gid = gid_match.group(1) if gid_match else '0'
     
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
