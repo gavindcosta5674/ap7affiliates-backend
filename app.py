@@ -205,13 +205,17 @@ def build_report_entry(row: dict, affiliate_id: Optional[str] = None, commission
         entry["affiliate_id"] = affiliate_id
     entry["registration_date"] = entry.get("registration_date") or entry.get("registered_at") or entry.get("ftd_date") or ""
     entry["ftd_date"] = entry.get("ftd_date") or entry.get("first_deposit_date") or ""
+    entry["first_deposit_amount"] = entry.get("first_deposit_amount") or 0
     entry["deposit_count"] = deposit_count
     entry["withdrawal_count"] = withdrawal_count
     entry["bonus_count"] = bonus_count
     entry["transaction_count"] = transaction_count
     if commission_percentage is not None:
         entry["commission_percentage"] = commission_percentage
-        entry["commission"] = round(float(entry.get("revenue", 0)) * float(commission_percentage) / 100, 2)
+        # Revenue = Deposits - Withdrawals - Bonuses
+        revenue = round(float(entry.get("deposit", 0)) - float(entry.get("withdrawal", 0)) - float(entry.get("bonus", 0)), 2)
+        entry["revenue"] = revenue
+        entry["commission"] = round(revenue * float(commission_percentage) / 100, 2)
     return entry
 
 
@@ -360,18 +364,34 @@ def get_dashboard():
             unique_player_usernames.add(r.get("player_username", "").lower())
     
     # Aggregate from raw_data_db (sum all transactions per player)
-    player_aggregates = {}  # {player_username.lower(): {deposits, withdrawals, bonuses}}
+    player_aggregates = {}  # {player_username.lower(): {deposits, withdrawals, bonuses, ftd_date, reg_date, deposit_count, first_deposit_amount}}
     for row in raw_data_db:
         player_name = row.get("player_username", "").lower()
         if not player_name:
             continue
         
         if player_name not in player_aggregates:
-            player_aggregates[player_name] = {"deposit": 0, "withdrawal": 0, "bonus": 0}
+            player_aggregates[player_name] = {
+                "deposit": 0, 
+                "withdrawal": 0, 
+                "bonus": 0,
+                "deposit_count": 0,
+                "first_deposit_amount": 0,
+                "ftd_date": None,
+                "registration_date": row.get("registration_date", row.get("date", ""))
+            }
         
-        player_aggregates[player_name]["deposit"] += float(row.get("deposit_amount", 0) or 0)
+        deposit = float(row.get("deposit_amount", 0) or 0)
+        player_aggregates[player_name]["deposit"] += deposit
         player_aggregates[player_name]["withdrawal"] += float(row.get("withdrawal_amount", 0) or 0)
         player_aggregates[player_name]["bonus"] += float(row.get("bonus_amount", 0) or 0)
+        
+        # Track deposit count
+        if deposit > 0:
+            player_aggregates[player_name]["deposit_count"] += 1
+            if not player_aggregates[player_name]["ftd_date"]:
+                player_aggregates[player_name]["ftd_date"] = row.get("date", row.get("registration_date", ""))
+                player_aggregates[player_name]["first_deposit_amount"] = deposit
     
     # Add aggregated raw_data players
     for player_name, totals in player_aggregates.items():
@@ -382,6 +402,10 @@ def get_dashboard():
                 "deposit": totals["deposit"],
                 "withdrawal": totals["withdrawal"],
                 "bonus": totals["bonus"],
+                "deposit_count": totals["deposit_count"],
+                "ftd_date": totals["ftd_date"],
+                "registration_date": totals["registration_date"],
+                "first_deposit_amount": totals["first_deposit_amount"],
             })
     
     # Count from players_db
@@ -394,13 +418,17 @@ def get_dashboard():
                 "deposit": float(player.get("deposit_total", 0) or 0),
                 "withdrawal": float(player.get("withdrawal_total", 0) or 0),
                 "bonus": float(player.get("bonus_total", 0) or 0),
+                "deposit_count": player.get("deposit_count", 0),
+                "ftd_date": player.get("ftd_date", ""),
+                "registration_date": player.get("registration_date", ""),
+                "first_deposit_amount": player.get("first_deposit_amount", 0),
             })
     
     total_players = len(unique_player_usernames)
     total_deposits = sum(r.get("deposit", 0) for r in all_players)
     total_withdrawals = sum(r.get("withdrawal", 0) for r in all_players)
     total_bonuses = sum(r.get("bonus", 0) for r in all_players)
-    total_revenue = round(total_deposits - total_withdrawals, 2)
+    total_revenue = round(total_deposits - total_withdrawals - total_bonuses, 2)
     
     avg_pct = sum(a["commission_pct"] for a in affiliates_db) / len(affiliates_db) if affiliates_db else 20
     total_commission = round(total_revenue * avg_pct / 100, 2)
@@ -447,7 +475,7 @@ def get_dashboard():
                 wd += float(player.get("withdrawal_total", 0) or 0)
                 bn += float(player.get("bonus_total", 0) or 0)
         
-        rev = round(dep - wd, 2)
+        rev = round(dep - wd - bn, 2)
         comm = round(rev * aff["commission_pct"] / 100, 2)
         recent.append({
             "affiliate_id": aff_id,
@@ -490,7 +518,7 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
     seen_players = set()  # Track unique player_username
     
     # PRIORITY 1: Aggregate transactions from raw_data_db by player (most accurate data)
-    player_aggregates = {}  # {(player_username, affiliate_id): {deposits, withdrawals, bonuses, dates}}
+    player_aggregates = {}  # {(player_username, affiliate_id): {deposits, withdrawals, bonuses, dates, deposit_count}}
     for row in raw_data_db:
         player_name = row.get("player_username", "").lower()
         aff_id = row.get("affiliate_id", "")
@@ -502,9 +530,11 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
                 "withdrawals": 0.0,
                 "bonuses": 0.0,
                 "ftd_date": None,
+                "first_deposit_amount": 0.0,
                 "registration_date": row.get("registration_date", row.get("date", "")),
                 "player_username": row.get("player_username", ""),
                 "affiliate_id": aff_id,
+                "deposit_count": 0,
             }
         
         deposit = float(row.get("deposit_amount", 0) or 0)
@@ -516,9 +546,12 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
         player_aggregates[key]["withdrawals"] += withdrawal
         player_aggregates[key]["bonuses"] += bonus
         
-        # Track FTD date (first deposit)
-        if deposit > 0 and not player_aggregates[key]["ftd_date"]:
-            player_aggregates[key]["ftd_date"] = row.get("date", row.get("registration_date", ""))
+        # Track FTD date and first deposit amount
+        if deposit > 0:
+            player_aggregates[key]["deposit_count"] += 1
+            if not player_aggregates[key]["ftd_date"]:
+                player_aggregates[key]["ftd_date"] = row.get("date", row.get("registration_date", ""))
+                player_aggregates[key]["first_deposit_amount"] = deposit
     
     # Add aggregated players from raw_data_db to reports
     for idx, ((player_name, aff_id), data) in enumerate(player_aggregates.items(), start=1):
@@ -534,7 +567,7 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
         deposit_total = round(data["deposits"], 2)
         withdrawal_total = round(data["withdrawals"], 2)
         bonus_total = round(data["bonuses"], 2)
-        revenue = round(deposit_total - withdrawal_total, 2)
+        revenue = round(deposit_total - withdrawal_total - bonus_total, 2)
         commission = round(revenue * commission_percentage / 100, 2)
         
         all_reports.append(build_report_entry({
@@ -544,8 +577,10 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
             "affiliate_id": aff_id,
             "ftd_date": data["ftd_date"] or data["registration_date"] or "",
             "registration_date": data["registration_date"] or "",
+            "first_deposit_amount": data["first_deposit_amount"],
             "deposit": deposit_total,
-            "count": 1 if deposit_total > 0 else 0,
+            "count": data["deposit_count"],
+            "deposit_count": data["deposit_count"],
             "withdrawal": withdrawal_total,
             "withdrawal_count": 1 if withdrawal_total > 0 else 0,
             "bonus": bonus_total,
@@ -587,6 +622,7 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
             "affiliate_id": aff_id,
             "ftd_date": player.get("ftd_date") or "",
             "registration_date": player.get("registration_date") or player.get("ftd_date") or "",
+            "first_deposit_amount": player.get("first_deposit_amount", 0),
             "deposit": player.get("deposit_total", 0),
             "count": player.get("deposit_count", 0),
             "deposit_count": player.get("deposit_count", 0),
@@ -594,7 +630,7 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
             "withdrawal_count": 1 if float(player.get("withdrawal_total", 0) or 0) > 0 else 0,
             "bonus": player.get("bonus_total", 0),
             "bonus_count": 1 if float(player.get("bonus_total", 0) or 0) > 0 else 0,
-            "revenue": player.get("revenue", 0),
+            "revenue": round(float(player.get("deposit_total", 0) or 0) - float(player.get("withdrawal_total", 0) or 0) - float(player.get("bonus_total", 0) or 0), 2),
             "commission": player.get("commission", 0),
         }
         all_reports.append(build_report_entry(row, affiliate_id=aff_id, commission_percentage=commission_percentage))
