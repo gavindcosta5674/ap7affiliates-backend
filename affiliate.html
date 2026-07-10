@@ -263,11 +263,11 @@
                                 <table class="table table-hover mb-0">
                                     <thead>
                                         <tr>
-                                            <th>Player</th>
+                                            <th>Player Username</th>
+                                            <th>Register Date</th>
                                             <th>FTD Date</th>
-                                            <th>Deposits</th>
-                                            <th>Withdrawals</th>
-                                            <th>Bonuses</th>
+                                            <th>FTD Amount</th>
+                                            <th>Last Deposit Date</th>
                                             <th>Revenue</th>
                                             <th>Commission</th>
                                         </tr>
@@ -462,13 +462,11 @@
                                             <th>Player Username</th>
                                             <th>Registration Date</th>
                                             <th>FTD Date</th>
-                                            <th>Deposit</th>
-                                            <th>Dep Txns</th>
+                                            <th>FTD Amount</th>
+                                            <th>Total Deposit</th>
+                                            <th>Deposit Count</th>
                                             <th>Withdrawal</th>
-                                            <th>W/D Txns</th>
                                             <th>Bonus</th>
-                                            <th>Bonus Txns</th>
-                                            <th>Total Txns</th>
                                             <th>Net Revenue</th>
                                             <th>Commission %</th>
                                             <th>Earned Payout</th>
@@ -704,10 +702,10 @@
                 tbody.innerHTML = players.map(p => `
                     <tr>
                         <td class="fw-semibold">${p.player_username}</td>
+                        <td>${p.registration_date || '-'}</td>
                         <td>${p.ftd_date || '-'}</td>
-                        <td>₹${numFormat(p.deposit)}</td>
-                        <td>₹${numFormat(p.withdrawal)}</td>
-                        <td>₹${numFormat(p.bonus)}</td>
+                        <td>₹${numFormat(p.first_deposit_amount || 0)}</td>
+                        <td>${p.last_deposit_date || '-'}</td>
                         <td class="fw-semibold">₹${numFormat(p.revenue)}</td>
                         <td class="fw-semibold text-success">₹${numFormat(p.commission)}</td>
                     </tr>
@@ -839,6 +837,7 @@
             if ($.fn.DataTable) {
                 linksDataTable = $('#links-datatable').DataTable({
                     pageLength: 25,
+                    lengthMenu: [[25, 50, 75, 100], ['25 entries', '50 entries', '75 entries', '100 entries']],
                     order: [[0, 'desc']],
                     language: { search: '<i class="bi bi-search me-1"></i> Search:' }
                 });
@@ -882,7 +881,7 @@
             document.getElementById('affiliate-report-visible-count').textContent = Array.isArray(data) ? data.length : 0;
 
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-3">No report data</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-3">No report data</td></tr>';
                 return;
             }
 
@@ -891,21 +890,16 @@
             tbody.innerHTML = data.map(r => {
                 const commission = r.revenue * (commPct / 100);
                 const depositCount = r.deposit_count ?? r.count ?? 0;
-                const withdrawalCount = r.withdrawal_count ?? 0;
-                const bonusCount = r.bonus_count ?? 0;
-                const totalTransactions = r.transaction_count ?? (depositCount + withdrawalCount + bonusCount);
                 return `
                     <tr>
                         <td class="fw-semibold">${r.player_username}</td>
                         <td>${r.registration_date || '-'}</td>
                         <td>${r.ftd_date || '-'}</td>
+                        <td class="fw-semibold">₹${numFormat(r.first_deposit_amount || 0)}</td>
                         <td class="fw-semibold">₹${numFormat(r.deposit)}</td>
                         <td>${depositCount}</td>
                         <td class="text-danger">₹${numFormat(r.withdrawal)}</td>
-                        <td>${withdrawalCount}</td>
                         <td class="text-warning">₹${numFormat(r.bonus)}</td>
-                        <td>${bonusCount}</td>
-                        <td class="fw-semibold">${totalTransactions}</td>
                         <td class="fw-semibold">₹${numFormat(r.revenue)}</td>
                         <td>${commPct}%</td>
                         <td class="fw-semibold text-success">₹${numFormat(commission)}</td>
@@ -916,7 +910,8 @@
             if (reportDataTable) reportDataTable.destroy();
             if ($.fn.DataTable) {
                 reportDataTable = $('#report-datatable').DataTable({
-                    pageLength: 25,
+                    pageLength: 75,
+                    lengthMenu: [[25, 50, 75, 100], ['25 entries', '50 entries', '75 entries', '100 entries']],
                     order: [[1, 'desc']],
                     language: { search: '<i class="bi bi-search me-1"></i> Search:' }
                 });

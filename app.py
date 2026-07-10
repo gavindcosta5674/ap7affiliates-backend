@@ -740,6 +740,7 @@ def get_players(affiliate_id: str = None):
                 "bonuses": 0.0,
                 "ftd_date": None,
                 "first_deposit_amount": 0.0,
+                "last_deposit_date": None,
                 "registration_date": row.get("registration_date", row.get("date", "")),
                 "player_username": row.get("player_username", ""),
                 "affiliate_id": aff_id,
@@ -761,6 +762,8 @@ def get_players(affiliate_id: str = None):
             if not player_aggregates[key]["ftd_date"]:
                 player_aggregates[key]["ftd_date"] = row.get("date", row.get("registration_date", ""))
                 player_aggregates[key]["first_deposit_amount"] = deposit
+            # Always update last_deposit_date
+            player_aggregates[key]["last_deposit_date"] = row.get("date", row.get("registration_date", ""))
     
     # Add aggregated players from raw_data_db
     for idx, ((player_name, aff_id), data) in enumerate(player_aggregates.items(), start=1):
@@ -784,14 +787,15 @@ def get_players(affiliate_id: str = None):
             "player_id": f"RAW-{idx}",
             "player_username": data["player_username"],
             "affiliate_id": aff_id,
-            "ftd_date": data["ftd_date"] or data["registration_date"] or "",
             "registration_date": data["registration_date"] or "",
+            "ftd_date": data["ftd_date"] or data["registration_date"] or "",
             "first_deposit_amount": data["first_deposit_amount"],
-            "deposit": deposit_total,
+            "last_deposit_date": data["last_deposit_date"] or data["ftd_date"] or "",
+            "deposit": round(data["deposits"], 2),
             "deposit_count": data["deposit_count"],
-            "withdrawal": withdrawal_total,
-            "bonus": bonus_total,
-            "revenue": revenue,
+            "withdrawal": round(data["withdrawals"], 2),
+            "bonus": round(data["bonuses"], 2),
+            "revenue": round(round(data["deposits"], 2) - round(data["withdrawals"], 2) - round(data["bonuses"], 2), 2),
             "commission": commission,
             "commission_percentage": commission_percentage,
         })
@@ -820,9 +824,10 @@ def get_players(affiliate_id: str = None):
             "player_id": player.get("player_id"),
             "player_username": player.get("player_username"),
             "affiliate_id": aff_id,
-            "ftd_date": player.get("ftd_date", ""),
             "registration_date": player.get("registration_date", ""),
+            "ftd_date": player.get("ftd_date", ""),
             "first_deposit_amount": player.get("first_deposit_amount", 0),
+            "last_deposit_date": player.get("last_deposit_date", player.get("ftd_date", "")),
             "deposit": deposit_total,
             "deposit_count": player.get("deposit_count", 0),
             "withdrawal": withdrawal_total,

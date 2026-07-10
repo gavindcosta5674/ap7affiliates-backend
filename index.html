@@ -613,15 +613,12 @@
                                 <thead>
                                     <tr>
                                         <th>Player ID</th>
-                                        <th>Username</th>
+                                        <th>Player Username</th>
                                         <th>Affiliate ID</th>
+                                        <th>Register Date</th>
                                         <th>FTD Date</th>
-                                        <th>Deposits</th>
-                                        <th>Deposit Count</th>
-                                        <th>Withdrawals</th>
-                                        <th>Bonuses</th>
-                                        <th>Revenue</th>
-                                        <th>Commission</th>
+                                        <th>FTD Amount</th>
+                                        <th>Last Deposit Date</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
@@ -719,6 +716,7 @@
                                         <th>Player Username</th>
                                         <th>Registration Date</th>
                                         <th>FTD Date</th>
+                                        <th>First Deposit</th>
                                         <th>Deposit</th>
                                         <th>Deposit Count</th>
                                         <th>Withdrawal</th>
@@ -1117,6 +1115,7 @@
             if ($.fn.DataTable) {
                 affiliatesDataTable = $('#affiliates-datatable').DataTable({
                     pageLength: 25,
+                    lengthMenu: [[25, 50, 75, 100], ['25 entries', '50 entries', '75 entries', '100 entries']],
                     order: [[0, 'desc']],
                     language: { search: '<i class="bi bi-search me-1"></i> Search:' }
                 });
@@ -1350,7 +1349,7 @@
             const tbody = document.getElementById('players-table-body');
 
             if (!Array.isArray(data) || data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-3">No players</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No players</td></tr>';
                 return;
             }
 
@@ -1359,13 +1358,10 @@
                     <td><span class="fw-semibold text-primary">${p.player_id}</span></td>
                     <td>${p.player_username}</td>
                     <td>${p.affiliate_id}</td>
+                    <td>${p.registration_date || '-'}</td>
                     <td>${p.ftd_date || '-'}</td>
-                    <td class="fw-semibold">₹${numFormat(p.deposit_total)}</td>
-                    <td>${p.deposit_count || 0}</td>
-                    <td class="text-danger">₹${numFormat(p.withdrawal_total)}</td>
-                    <td class="text-warning">₹${numFormat(p.bonus_total)}</td>
-                    <td class="fw-semibold">₹${numFormat(p.revenue)}</td>
-                    <td class="fw-semibold text-success">₹${numFormat(p.commission)}</td>
+                    <td class="fw-semibold">₹${numFormat(p.first_deposit_amount || 0)}</td>
+                    <td>${p.last_deposit_date || '-'}</td>
                     <td>
                         <button class="btn-sm-icon btn btn-outline-danger btn-sm" onclick="deletePlayer('${p.player_id}')" title="Delete">
                             <i class="bi bi-trash3"></i>
@@ -1377,7 +1373,8 @@
             if (playersDataTable) playersDataTable.destroy();
             if ($.fn.DataTable) {
                 playersDataTable = $('#players-datatable').DataTable({
-                    pageLength: 25,
+                    pageLength: 75,
+                    lengthMenu: [[25, 50, 75, 100], ['25 entries', '50 entries', '75 entries', '100 entries']],
                     order: [[0, 'desc']],
                     language: { search: '<i class="bi bi-search me-1"></i> Search:' }
                 });
@@ -1459,7 +1456,7 @@
             document.getElementById('report-visible-count').textContent = reportRows.length;
 
             if (reportRows.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-3">No report data</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-3">No report data</td></tr>';
                 window._reportData = [];
                 return;
             }
@@ -1470,6 +1467,7 @@
                     <td>${r.player_username}</td>
                     <td>${r.registration_date || r.ftd_date || '-'}</td>
                     <td>${r.ftd_date || '-'}</td>
+                    <td class="fw-semibold">₹${numFormat(r.first_deposit_amount || 0)}</td>
                     <td class="fw-semibold">₹${numFormat(r.deposit)}</td>
                     <td>${r.count || r.deposit_count || 0}</td>
                     <td class="text-danger">₹${numFormat(r.withdrawal)}</td>
@@ -1483,7 +1481,8 @@
             if (reportsDataTable) reportsDataTable.destroy();
             if ($.fn.DataTable) {
                 reportsDataTable = $('#reports-datatable').DataTable({
-                    pageLength: 25,
+                    pageLength: 75,
+                    lengthMenu: [[25, 50, 75, 100], ['25 entries', '50 entries', '75 entries', '100 entries']],
                     order: [[2, 'desc']],
                     language: { search: '<i class="bi bi-search me-1"></i> Search:' }
                 });
