@@ -489,48 +489,7 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
     all_reports = []
     seen_players = set()  # Track unique player_username
     
-    for player in players_db:
-        aff_id = player.get("affiliate_id")
-        if affiliate_id and aff_id != affiliate_id:
-            continue
-        player_name = player.get("player_username", "").lower()
-        if player_name in seen_players:
-            continue
-        seen_players.add(player_name)
-        
-        aff = find_affiliate_by_id(aff_id)
-        commission_percentage = aff["commission_pct"] if aff else 20
-        row = {
-            "id": player.get("player_id"),
-            "player_id": player.get("player_id"),
-            "player_username": player.get("player_username"),
-            "affiliate_id": aff_id,
-            "ftd_date": player.get("ftd_date") or "",
-            "registration_date": player.get("registration_date") or player.get("ftd_date") or "",
-            "deposit": player.get("deposit_total", 0),
-            "count": player.get("deposit_count", 0),
-            "deposit_count": player.get("deposit_count", 0),
-            "withdrawal": player.get("withdrawal_total", 0),
-            "withdrawal_count": 1 if float(player.get("withdrawal_total", 0) or 0) > 0 else 0,
-            "bonus": player.get("bonus_total", 0),
-            "bonus_count": 1 if float(player.get("bonus_total", 0) or 0) > 0 else 0,
-            "revenue": player.get("revenue", 0),
-            "commission": player.get("commission", 0),
-        }
-        all_reports.append(build_report_entry(row, affiliate_id=aff_id, commission_percentage=commission_percentage))
-
-    for aff_id, rows in reports_db.items():
-        for r in rows:
-            player_name = r.get("player_username", "").lower()
-            if player_name in seen_players:
-                continue
-            seen_players.add(player_name)
-            
-            aff = find_affiliate_by_id(aff_id)
-            commission_percentage = aff["commission_pct"] if aff else 20
-            all_reports.append(build_report_entry(r, affiliate_id=aff_id, commission_percentage=commission_percentage))
-
-    # Aggregate transactions from raw_data_db by player
+    # PRIORITY 1: Aggregate transactions from raw_data_db by player (most accurate data)
     player_aggregates = {}  # {(player_username, affiliate_id): {deposits, withdrawals, bonuses, dates}}
     for row in raw_data_db:
         player_name = row.get("player_username", "").lower()
@@ -561,8 +520,10 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
         if deposit > 0 and not player_aggregates[key]["ftd_date"]:
             player_aggregates[key]["ftd_date"] = row.get("date", row.get("registration_date", ""))
     
-    # Add aggregated players to reports
+    # Add aggregated players from raw_data_db to reports
     for idx, ((player_name, aff_id), data) in enumerate(player_aggregates.items(), start=1):
+        if affiliate_id and aff_id != affiliate_id:
+            continue
         if player_name in seen_players:
             continue
         seen_players.add(player_name)
@@ -592,6 +553,51 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
             "revenue": revenue,
             "commission": commission,
         }, affiliate_id=aff_id, commission_percentage=commission_percentage))
+
+    # PRIORITY 2: Add players from reports_db
+    for aff_id, rows in reports_db.items():
+        if affiliate_id and aff_id != affiliate_id:
+            continue
+        for r in rows:
+            player_name = r.get("player_username", "").lower()
+            if player_name in seen_players:
+                continue
+            seen_players.add(player_name)
+            
+            aff = find_affiliate_by_id(aff_id)
+            commission_percentage = aff["commission_pct"] if aff else 20
+            all_reports.append(build_report_entry(r, affiliate_id=aff_id, commission_percentage=commission_percentage))
+
+    # PRIORITY 3: Add players from players_db (only if not already added)
+    for player in players_db:
+        aff_id = player.get("affiliate_id")
+        if affiliate_id and aff_id != affiliate_id:
+            continue
+        player_name = player.get("player_username", "").lower()
+        if player_name in seen_players:
+            continue
+        seen_players.add(player_name)
+        
+        aff = find_affiliate_by_id(aff_id)
+        commission_percentage = aff["commission_pct"] if aff else 20
+        row = {
+            "id": player.get("player_id"),
+            "player_id": player.get("player_id"),
+            "player_username": player.get("player_username"),
+            "affiliate_id": aff_id,
+            "ftd_date": player.get("ftd_date") or "",
+            "registration_date": player.get("registration_date") or player.get("ftd_date") or "",
+            "deposit": player.get("deposit_total", 0),
+            "count": player.get("deposit_count", 0),
+            "deposit_count": player.get("deposit_count", 0),
+            "withdrawal": player.get("withdrawal_total", 0),
+            "withdrawal_count": 1 if float(player.get("withdrawal_total", 0) or 0) > 0 else 0,
+            "bonus": player.get("bonus_total", 0),
+            "bonus_count": 1 if float(player.get("bonus_total", 0) or 0) > 0 else 0,
+            "revenue": player.get("revenue", 0),
+            "commission": player.get("commission", 0),
+        }
+        all_reports.append(build_report_entry(row, affiliate_id=aff_id, commission_percentage=commission_percentage))
 
     if player_username:
         all_reports = [r for r in all_reports if player_username.lower() in r["player_username"].lower()]
