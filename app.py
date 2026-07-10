@@ -509,36 +509,68 @@ def get_reports(affiliate_id: str = None, date_from: str = None, date_to: str = 
             commission_percentage = aff["commission_pct"] if aff else 20
             all_reports.append(build_report_entry(r, affiliate_id=aff_id, commission_percentage=commission_percentage))
 
-    global raw_data_counter
-    for idx, row in enumerate(raw_data_db, start=1):
+    # Aggregate transactions from raw_data_db by player
+    player_aggregates = {}  # {(player_username, affiliate_id): {deposits, withdrawals, bonuses, dates}}
+    for row in raw_data_db:
         player_name = row.get("player_username", "").lower()
+        aff_id = row.get("affiliate_id", "")
+        key = (player_name, aff_id)
+        
+        if key not in player_aggregates:
+            player_aggregates[key] = {
+                "deposits": 0.0,
+                "withdrawals": 0.0,
+                "bonuses": 0.0,
+                "ftd_date": None,
+                "registration_date": row.get("registration_date", row.get("date", "")),
+                "player_username": row.get("player_username", ""),
+                "affiliate_id": aff_id,
+            }
+        
+        deposit = float(row.get("deposit_amount", 0) or 0)
+        withdrawal = float(row.get("withdrawal_amount", 0) or 0)
+        bonus = float(row.get("bonus_amount", 0) or 0)
+        
+        # Aggregate amounts
+        player_aggregates[key]["deposits"] += deposit
+        player_aggregates[key]["withdrawals"] += withdrawal
+        player_aggregates[key]["bonuses"] += bonus
+        
+        # Track FTD date (first deposit)
+        if deposit > 0 and not player_aggregates[key]["ftd_date"]:
+            player_aggregates[key]["ftd_date"] = row.get("date", row.get("registration_date", ""))
+    
+    # Add aggregated players to reports
+    for idx, ((player_name, aff_id), data) in enumerate(player_aggregates.items(), start=1):
         if player_name in seen_players:
             continue
         seen_players.add(player_name)
         
-        aff = find_affiliate_by_id(row.get("affiliate_id"))
+        aff = find_affiliate_by_id(aff_id)
         commission_percentage = aff["commission_pct"] if aff else 20
-        deposit = float(row.get("deposit_amount", 0) or 0)
-        withdrawal = float(row.get("withdrawal_amount", 0) or 0)
-        bonus = float(row.get("bonus_amount", 0) or 0)
-        revenue = round(deposit - withdrawal - bonus, 2)
+        
+        deposit_total = round(data["deposits"], 2)
+        withdrawal_total = round(data["withdrawals"], 2)
+        bonus_total = round(data["bonuses"], 2)
+        revenue = round(deposit_total - withdrawal_total, 2)
         commission = round(revenue * commission_percentage / 100, 2)
+        
         all_reports.append(build_report_entry({
             "id": f"RAW-{idx}",
             "player_id": f"RAW-{idx}",
-            "player_username": row.get("player_username", ""),
-            "affiliate_id": row.get("affiliate_id", ""),
-            "ftd_date": row.get("date") or row.get("registration_date") or "",
-            "registration_date": row.get("registration_date") or row.get("date") or "",
-            "deposit": deposit,
-            "count": 1 if deposit > 0 else 0,
-            "withdrawal": withdrawal,
-            "withdrawal_count": 1 if withdrawal > 0 else 0,
-            "bonus": bonus,
-            "bonus_count": 1 if bonus > 0 else 0,
+            "player_username": data["player_username"],
+            "affiliate_id": aff_id,
+            "ftd_date": data["ftd_date"] or data["registration_date"] or "",
+            "registration_date": data["registration_date"] or "",
+            "deposit": deposit_total,
+            "count": 1 if deposit_total > 0 else 0,
+            "withdrawal": withdrawal_total,
+            "withdrawal_count": 1 if withdrawal_total > 0 else 0,
+            "bonus": bonus_total,
+            "bonus_count": 1 if bonus_total > 0 else 0,
             "revenue": revenue,
             "commission": commission,
-        }, affiliate_id=row.get("affiliate_id"), commission_percentage=commission_percentage))
+        }, affiliate_id=aff_id, commission_percentage=commission_percentage))
 
     if player_username:
         all_reports = [r for r in all_reports if player_username.lower() in r["player_username"].lower()]
