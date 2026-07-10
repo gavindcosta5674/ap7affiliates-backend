@@ -969,41 +969,8 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
     seen_players = set()  # Track unique player_username
     aff = find_affiliate_by_id(affiliate_id)
     commission_percentage = aff["commission_pct"] if aff else 20
-    for player in players_db:
-        if player.get("affiliate_id") != affiliate_id:
-            continue
-        player_name = player.get("player_username", "").lower()
-        if player_name in seen_players:
-            continue
-        seen_players.add(player_name)
-        
-        row = {
-            "id": player.get("player_id"),
-            "player_id": player.get("player_id"),
-            "player_username": player.get("player_username"),
-            "affiliate_id": affiliate_id,
-            "ftd_date": player.get("ftd_date") or "",
-            "registration_date": player.get("registration_date") or player.get("ftd_date") or "",
-            "deposit": player.get("deposit_total", 0),
-            "count": player.get("deposit_count", 0),
-            "deposit_count": player.get("deposit_count", 0),
-            "withdrawal": player.get("withdrawal_total", 0),
-            "withdrawal_count": 1 if float(player.get("withdrawal_total", 0) or 0) > 0 else 0,
-            "bonus": player.get("bonus_total", 0),
-            "bonus_count": 1 if float(player.get("bonus_total", 0) or 0) > 0 else 0,
-            "revenue": player.get("revenue", 0),
-            "commission": player.get("commission", 0),
-        }
-        result.append(build_report_entry(row, affiliate_id=affiliate_id, commission_percentage=commission_percentage))
-
-    rows = reports_db.get(affiliate_id, [])
-    for r in rows:
-        player_name = r.get("player_username", "").lower()
-        if player_name in seen_players:
-            continue
-        seen_players.add(player_name)
-        result.append(build_report_entry(r, affiliate_id=affiliate_id, commission_percentage=commission_percentage))
-
+    
+    # PRIORITY 1: Process raw_data_db first (has actual transaction data)
     for row in raw_data_db:
         if row.get("affiliate_id") != affiliate_id:
             continue
