@@ -983,12 +983,15 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
         wdr = float(row.get("withdrawal_amount", 0) or 0)
         bon = float(row.get("bonus_amount", 0) or 0)
         row_date = row.get("date") or row.get("registration_date") or ""
+        reg_date = row.get("registration_date") or ""
+        
         if player_name not in player_totals:
             player_totals[player_name] = {
                 "player_username": row.get("player_username", ""),
                 "affiliate_id": affiliate_id,
-                "ftd_date": row_date,
-                "registration_date": row.get("registration_date") or row_date,
+                "ftd_date": None if dep == 0 else row_date,  # First deposit date
+                "registration_date": reg_date,
+                "first_deposit_amount": dep if dep > 0 else 0.0,  # Amount of first deposit
                 "deposit": 0.0, "withdrawal": 0.0, "bonus": 0.0,
                 "deposit_count": 0, "withdrawal_count": 0, "bonus_count": 0,
             }
@@ -999,9 +1002,12 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
         if dep > 0: pt["deposit_count"] += 1
         if wdr > 0: pt["withdrawal_count"] += 1
         if bon > 0: pt["bonus_count"] += 1
-        # Keep earliest date as FTD
-        if row_date and (not pt["ftd_date"] or row_date < pt["ftd_date"]):
-            pt["ftd_date"] = row_date
+        
+        # Keep earliest date with deposit > 0 as FTD
+        if dep > 0 and row_date:
+            if not pt["ftd_date"] or row_date < pt["ftd_date"]:
+                pt["ftd_date"] = row_date
+                pt["first_deposit_amount"] = dep
 
     result = []
     for idx, (_, pt) in enumerate(player_totals.items()):
@@ -1011,8 +1017,9 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
             "player_id": f"RAW-{idx}",
             "player_username": pt["player_username"],
             "affiliate_id": affiliate_id,
-            "ftd_date": pt["ftd_date"],
-            "registration_date": pt["registration_date"],
+            "ftd_date": pt["ftd_date"] or "",
+            "registration_date": pt["registration_date"] or "",
+            "first_deposit_amount": pt["first_deposit_amount"],
             "deposit": round(pt["deposit"], 2),
             "count": pt["deposit_count"],
             "withdrawal": round(pt["withdrawal"], 2),
