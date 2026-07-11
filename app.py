@@ -1275,15 +1275,25 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
     rows = []
     errors = []
     existing_dates = set()
+    existing_keys = set()  # Composite keys for dedup: (date, affiliate_id, player_username, deposit, withdrawal, bonus)
     reader = csv.reader(body.csv_text.splitlines())
     headers = None
     first_row = True
     col_indices = {}  # Map column names to indices
     
-    # Get all existing transaction dates
+    # Build existing record keys to prevent duplicates
     for entry in raw_data_db:
         if entry.get('date'):
             existing_dates.add(entry['date'])
+            key = (
+                entry.get('date', ''),
+                entry.get('affiliate_id', ''),
+                entry.get('player_username', '').lower(),
+                round(float(entry.get('deposit_amount', 0)), 2),
+                round(float(entry.get('withdrawal_amount', 0)), 2),
+                round(float(entry.get('bonus_amount', 0)), 2),
+            )
+            existing_keys.add(key)
 
     for line_num, raw_cols in enumerate(reader, start=1):
         cols = [c.strip() for c in raw_cols]
@@ -1336,6 +1346,12 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
         if not affiliate_id:
             affiliate_id = "AFF-1001"
         
+        # Deduplication: skip exact duplicate records
+        row_key = (date_value, affiliate_id, player_username.lower(), round(deposit, 2), round(withdraw, 2), round(bonus, 2))
+        if row_key in existing_keys:
+            continue
+        existing_keys.add(row_key)
+
         rows.append({
             'date': date_value,
             'affiliate_id': affiliate_id,
@@ -1353,7 +1369,7 @@ def import_transaction_data_from_csv(body: TransactionImportRequest):
     info_msg = ""
     if overlapping_dates:
         sorted_dates = sorted(list(overlapping_dates))
-        info_msg = f"⚠️ Existing transaction data found for dates: {', '.join(sorted_dates)}. Proceeding with import will update these entries."
+        info_msg = f"ℹ️ Some dates already had data. Only new/unique transactions were added."
 
     # Auto-create player registrations for new players
     for row in rows:
