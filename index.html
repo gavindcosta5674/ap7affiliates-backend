@@ -742,6 +742,49 @@
                     <p>Import transaction and registration data for your affiliates</p>
                 </div>
 
+                <!-- ── Google Sheets Live Connection ── -->
+                <div class="content-card mb-4" style="border-left: 4px solid #16a34a;">
+                    <div class="card-header d-flex align-items-center justify-content-between">
+                        <h5 class="mb-0"><i class="bi bi-google me-2 text-success"></i>Google Sheets — Live Connection</h5>
+                        <span id="sheets-status-badge" class="badge bg-secondary">Not connected</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-success py-2 mb-3">
+                            <i class="bi bi-info-circle me-1"></i> Paste your Google Sheets URL below. Every time you click <strong>Sync Now</strong>, the latest data is fetched directly from your sheet.
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-7">
+                                <label class="form-label fw-semibold">Google Sheets URL</label>
+                                <input type="url" id="sheets-url-input" class="form-control" placeholder="https://docs.google.com/spreadsheets/d/..." />
+                                <div class="form-text">Make sure the sheet is set to <strong>Anyone with the link can view</strong>.</div>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label fw-semibold">Data Type</label>
+                                <select id="sheets-data-type" class="form-select">
+                                    <option value="transaction" selected>Transaction</option>
+                                    <option value="registration">Registration</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-semibold">Affiliate (optional)</label>
+                                <select id="sheets-affiliate-select" class="form-select">
+                                    <option value="">Auto-detect from sheet</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <button class="btn btn-success" onclick="syncFromGoogleSheets()">
+                                <i class="bi bi-arrow-repeat me-1"></i> Sync Now
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="clearSheetsConfig()">
+                                <i class="bi bi-x-circle me-1"></i> Clear
+                            </button>
+                            <span id="sheets-last-sync" class="text-muted small ms-2"></span>
+                        </div>
+                        <div id="sheets-sync-result" class="mt-3" style="display:none;"></div>
+                    </div>
+                </div>
+
                 <div class="content-card mb-4">
                     <div class="card-header">
                         <h5><i class="bi bi-clipboard-data me-2"></i>Paste Registration or Transaction Data</h5>
@@ -877,7 +920,7 @@
             case 'commission': loadCommissionData(); break;
             case 'players': loadPlayers(); break;
             case 'affiliates': loadAffiliatesOverview(); break;
-            case 'raw-import': loadAffiliatesTable(); break;
+            case 'raw-import': loadAffiliatesTable(); loadSheetsConfig(); break;
         }
     }
 
@@ -1133,6 +1176,8 @@
                     activeAffiliates.map(a => `<option value="${a.affiliate_id || a.id}">${a.affiliate_id || a.id} - ${a.first_name} ${a.last_name}</option>`).join('');
                 if (currentVal) sel.value = currentVal;
             });
+            // Also populate the Sheets affiliate dropdown
+            populateSheetsAffiliateSelect(activeAffiliates);
             
         } catch (err) {
             console.log('Affiliates load error:', err);
@@ -1983,6 +2028,120 @@
         const pastedInput = document.getElementById('raw-data-input').value.trim();
         const fileText = await readFileInputText();
         return fileText && fileText.trim() ? fileText : pastedInput;
+    }
+
+    // ── Google Sheets Live Sync ────────────────────────────────────────
+    const SHEETS_CONFIG_KEY = 'admin_sheets_config';
+
+    function loadSheetsConfig() {
+        const cfg = JSON.parse(localStorage.getItem(SHEETS_CONFIG_KEY) || '{}');
+        if (cfg.url) {
+            document.getElementById('sheets-url-input').value = cfg.url;
+            document.getElementById('sheets-data-type').value = cfg.data_type || 'transaction';
+            if (cfg.affiliate_id) document.getElementById('sheets-affiliate-select').value = cfg.affiliate_id;
+            if (cfg.last_sync) document.getElementById('sheets-last-sync').textContent = 'Last sync: ' + cfg.last_sync;
+            document.getElementById('sheets-status-badge').textContent = 'Connected';
+            document.getElementById('sheets-status-badge').className = 'badge bg-success';
+        }
+    }
+
+    function clearSheetsConfig() {
+        localStorage.removeItem(SHEETS_CONFIG_KEY);
+        document.getElementById('sheets-url-input').value = '';
+        document.getElementById('sheets-last-sync').textContent = '';
+        document.getElementById('sheets-status-badge').textContent = 'Not connected';
+        document.getElementById('sheets-status-badge').className = 'badge bg-secondary';
+        document.getElementById('sheets-sync-result').style.display = 'none';
+        showToast('Google Sheets connection cleared', 'info');
+    }
+
+    async function syncFromGoogleSheets() {
+        const url = document.getElementById('sheets-url-input').value.trim();
+        const dataType = document.getElementById('sheets-data-type').value;
+        const affiliateId = document.getElementById('sheets-affiliate-select').value;
+
+        if (!url) {
+            showToast('Please enter a Google Sheets URL', 'warning');
+            document.getElementById('sheets-url-input').focus();
+            return;
+        }
+        if (!url.includes('docs.google.com/spreadsheets')) {
+            showToast('Invalid Google Sheets URL', 'error');
+            return;
+        }
+
+        const btn = document.querySelector('[onclick="syncFromGoogleSheets()"]');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Syncing...';
+        document.getElementById('sheets-status-badge').textContent = 'Syncing...';
+        document.getElementById('sheets-status-badge').className = 'badge bg-warning text-dark';
+
+        try {
+            const payload = { sheet_url: url, data_type: dataType };
+            if (affiliateId) payload.affiliate_id = affiliateId;
+
+            const res = await fetch(`${API_BASE}/raw-data/import-from-google-sheets`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+
+            const nowStr = new Date().toLocaleString();
+            if (res.ok && data.success) {
+                // Save config to localStorage
+                localStorage.setItem(SHEETS_CONFIG_KEY, JSON.stringify({
+                    url, data_type: dataType, affiliate_id: affiliateId, last_sync: nowStr
+                }));
+                document.getElementById('sheets-last-sync').textContent = 'Last sync: ' + nowStr;
+                document.getElementById('sheets-status-badge').textContent = 'Synced ✓';
+                document.getElementById('sheets-status-badge').className = 'badge bg-success';
+
+                const infoMsg = data.info ? `<div class="alert alert-warning py-2 mb-2">${data.info}</div>` : '';
+                const resultHtml = `
+                    ${infoMsg}
+                    <div class="alert alert-success py-2 mb-0">
+                        <i class="bi bi-check-circle-fill me-1"></i>
+                        <strong>${data.imported_count} rows</strong> imported from Google Sheets on ${nowStr}.
+                        ${data.rows && data.rows.length > 0 ? `First row: <code>${data.rows[0].player_username}</code> — ₹${numFormat(data.rows[0].deposit_amount)} deposit` : ''}
+                    </div>`;
+                document.getElementById('sheets-sync-result').innerHTML = resultHtml;
+                document.getElementById('sheets-sync-result').style.display = 'block';
+
+                showToast(`Synced ${data.imported_count} rows from Google Sheets`, 'success');
+                // Refresh reports and players tables
+                loadReportsTable();
+                loadPlayersTable();
+            } else {
+                const errMsg = data.detail || data.error || 'Sync failed';
+                document.getElementById('sheets-status-badge').textContent = 'Error';
+                document.getElementById('sheets-status-badge').className = 'badge bg-danger';
+                document.getElementById('sheets-sync-result').innerHTML = `<div class="alert alert-danger py-2 mb-0"><i class="bi bi-x-circle-fill me-1"></i>${errMsg}</div>`;
+                document.getElementById('sheets-sync-result').style.display = 'block';
+                showToast(errMsg, 'error');
+            }
+        } catch (err) {
+            document.getElementById('sheets-status-badge').textContent = 'Error';
+            document.getElementById('sheets-status-badge').className = 'badge bg-danger';
+            showToast('Failed to connect to Google Sheets', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> Sync Now';
+        }
+    }
+
+    // Populate Google Sheets affiliate dropdown when affiliates are loaded
+    function populateSheetsAffiliateSelect(affiliates) {
+        const sel = document.getElementById('sheets-affiliate-select');
+        const current = sel.value;
+        sel.innerHTML = '<option value="">Auto-detect from sheet</option>';
+        affiliates.forEach(a => {
+            const opt = document.createElement('option');
+            opt.value = a.affiliate_id;
+            opt.textContent = `${a.affiliate_id} — ${a.name || a.username || ''}`;
+            sel.appendChild(opt);
+        });
+        if (current) sel.value = current;
     }
 
     function parsePreviewRows(rawInput, importType) {
