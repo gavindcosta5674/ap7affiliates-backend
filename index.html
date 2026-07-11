@@ -2196,6 +2196,20 @@
             document.getElementById('login-screen').style.display = 'flex';
             document.getElementById('main-panel').classList.remove('active');
         }
+
+        // Report filter form — prevent page reload, apply filters in-place
+        document.getElementById('report-filter-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const fd = new FormData(this);
+            const filters = Object.fromEntries(fd.entries());
+            loadReports(filters);
+        });
+
+        // Reset report filters
+        document.getElementById('reset-filters').addEventListener('click', function() {
+            document.getElementById('report-filter-form').reset();
+            loadReports({});
+        });
     });
     </script>
 </body>
