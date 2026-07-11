@@ -941,18 +941,21 @@ def affiliate_dashboard(authorization: Optional[str] = Header(None, alias="Autho
     aff = find_affiliate_by_id(affiliate_id)
     if not aff:
         raise HTTPException(status_code=404, detail="Affiliate not found")
-    rows = reports_db.get(affiliate_id, [])
-    total_deposits = sum(r["deposit"] for r in rows)
-    total_withdrawals = sum(r["withdrawal"] for r in rows)
-    total_bonuses = sum(r["bonus"] for r in rows)
+    commission_pct = aff.get("commission_pct", 0) or 0
+    # Aggregate from raw_data_db
+    aff_rows = [r for r in raw_data_db if r.get("affiliate_id") == affiliate_id]
+    unique_players = len(set(r.get("player_username", "").lower() for r in aff_rows if r.get("player_username")))
+    total_deposits = sum(float(r.get("deposit_amount", 0) or 0) for r in aff_rows)
+    total_withdrawals = sum(float(r.get("withdrawal_amount", 0) or 0) for r in aff_rows)
+    total_bonuses = sum(float(r.get("bonus_amount", 0) or 0) for r in aff_rows)
     total_revenue = total_deposits - total_withdrawals - total_bonuses
-    total_commission = sum(r["commission"] for r in rows)
+    total_commission = round(total_revenue * commission_pct / 100, 2)
     return {
         "affiliate_id": affiliate_id,
         "first_name": aff["first_name"],
         "last_name": aff["last_name"],
-        "commission_pct": aff["commission_pct"],
-        "total_players": len(rows),
+        "commission_pct": commission_pct,
+        "total_players": unique_players,
         "total_deposits": round(total_deposits, 2),
         "total_withdrawals": round(total_withdrawals, 2),
         "total_bonuses": round(total_bonuses, 2),
@@ -965,37 +968,57 @@ def affiliate_dashboard(authorization: Optional[str] = Header(None, alias="Autho
 def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authorization"), date_from: str = None, date_to: str = None, period: str = None):
     affiliate_id = get_affiliate_id_from_header(authorization)
     date_from, date_to = resolve_report_dates(period, date_from, date_to)
-    result = []
-    seen_players = set()  # Track unique player_username
     aff = find_affiliate_by_id(affiliate_id)
     commission_percentage = aff["commission_pct"] if aff else 20
-    
-    # PRIORITY 1: Process raw_data_db first (has actual transaction data)
+
+    # Aggregate ALL raw_data_db rows per player (sum deposits/withdrawals/bonuses)
+    player_totals = {}  # player_username_lower -> aggregated data
     for row in raw_data_db:
         if row.get("affiliate_id") != affiliate_id:
             continue
         player_name = row.get("player_username", "").lower()
-        if player_name in seen_players:
+        if not player_name:
             continue
-        seen_players.add(player_name)
-        
-        deposit = float(row.get("deposit_amount", 0) or 0)
-        withdrawal = float(row.get("withdrawal_amount", 0) or 0)
-        bonus = float(row.get("bonus_amount", 0) or 0)
-        revenue = round(deposit - withdrawal - bonus, 2)
+        dep = float(row.get("deposit_amount", 0) or 0)
+        wdr = float(row.get("withdrawal_amount", 0) or 0)
+        bon = float(row.get("bonus_amount", 0) or 0)
+        row_date = row.get("date") or row.get("registration_date") or ""
+        if player_name not in player_totals:
+            player_totals[player_name] = {
+                "player_username": row.get("player_username", ""),
+                "affiliate_id": affiliate_id,
+                "ftd_date": row_date,
+                "registration_date": row.get("registration_date") or row_date,
+                "deposit": 0.0, "withdrawal": 0.0, "bonus": 0.0,
+                "deposit_count": 0, "withdrawal_count": 0, "bonus_count": 0,
+            }
+        pt = player_totals[player_name]
+        pt["deposit"] += dep
+        pt["withdrawal"] += wdr
+        pt["bonus"] += bon
+        if dep > 0: pt["deposit_count"] += 1
+        if wdr > 0: pt["withdrawal_count"] += 1
+        if bon > 0: pt["bonus_count"] += 1
+        # Keep earliest date as FTD
+        if row_date and (not pt["ftd_date"] or row_date < pt["ftd_date"]):
+            pt["ftd_date"] = row_date
+
+    result = []
+    for idx, (_, pt) in enumerate(player_totals.items()):
+        revenue = round(pt["deposit"] - pt["withdrawal"] - pt["bonus"], 2)
         result.append(build_report_entry({
-            "id": f"RAW-{len(result)}",
-            "player_id": f"RAW-{len(result)}",
-            "player_username": row.get("player_username", ""),
-            "affiliate_id": row.get("affiliate_id", ""),
-            "ftd_date": row.get("date") or row.get("registration_date") or "",
-            "registration_date": row.get("registration_date") or row.get("date") or "",
-            "deposit": deposit,
-            "count": 1 if deposit > 0 else 0,
-            "withdrawal": withdrawal,
-            "withdrawal_count": 1 if withdrawal > 0 else 0,
-            "bonus": bonus,
-            "bonus_count": 1 if bonus > 0 else 0,
+            "id": f"RAW-{idx}",
+            "player_id": f"RAW-{idx}",
+            "player_username": pt["player_username"],
+            "affiliate_id": affiliate_id,
+            "ftd_date": pt["ftd_date"],
+            "registration_date": pt["registration_date"],
+            "deposit": round(pt["deposit"], 2),
+            "count": pt["deposit_count"],
+            "withdrawal": round(pt["withdrawal"], 2),
+            "withdrawal_count": pt["withdrawal_count"],
+            "bonus": round(pt["bonus"], 2),
+            "bonus_count": pt["bonus_count"],
             "revenue": revenue,
             "commission": round(revenue * commission_percentage / 100, 2),
         }, affiliate_id=affiliate_id, commission_percentage=commission_percentage))
