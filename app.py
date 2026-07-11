@@ -1707,5 +1707,31 @@ def import_from_google_sheets(body: dict):
         raise HTTPException(status_code=500, detail=f"Failed to fetch from Google Sheets: {error_msg}")
 
 # ── Entry Point ───────────────────────────────────────────────────────────
+
+# ── Startup: Auto-import from Google Sheets ───────────────────────────────
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1obOiP3Szeg_MMANRprkFMUiRTkyXy3XSNaZUETNwxEc/edit?gid=408856058#gid=408856058"
+
+@app.on_event("startup")
+async def auto_import_on_startup():
+    """Auto-import transaction data from Google Sheets when backend starts"""
+    import threading
+    def do_import():
+        import time
+        time.sleep(3)  # Small delay to let server fully start
+        try:
+            csv_url = convert_google_sheets_url_to_csv_export(GOOGLE_SHEET_URL)
+            resp = requests.get(csv_url, timeout=15)
+            resp.raise_for_status()
+            csv_text = resp.text
+            if csv_text.strip():
+                payload = TransactionImportRequest(csv_text=csv_text, affiliate_id=None)
+                result = import_transaction_data_from_csv(payload)
+                print(f"[Startup] Auto-imported {result.get('imported_count', 0)} rows from Google Sheets")
+            else:
+                print("[Startup] Google Sheet is empty, skipping auto-import")
+        except Exception as e:
+            print(f"[Startup] Auto-import from Google Sheets failed: {e}")
+    threading.Thread(target=do_import, daemon=True).start()
+
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
