@@ -64,6 +64,9 @@ link_id_counter = 0
 raw_data_db = []
 raw_data_counter = 0
 
+# Player registration data (username -> {registration_date, affiliate_id, ...})
+player_registrations_db = {}
+
 reports_db = {}
 
 # Shared media gallery
@@ -982,15 +985,18 @@ def affiliate_reports(authorization: Optional[str] = Header(None, alias="Authori
         dep = float(row.get("deposit_amount", 0) or 0)
         wdr = float(row.get("withdrawal_amount", 0) or 0)
         bon = float(row.get("bonus_amount", 0) or 0)
-        row_date = row.get("date") or row.get("registration_date") or ""
-        reg_date = row.get("registration_date") or ""
+        row_date = row.get("date") or ""
         
         if player_name not in player_totals:
+            # Look up actual registration date from player_registrations_db
+            reg_info = player_registrations_db.get(player_name, {})
+            actual_reg_date = reg_info.get("registration_date", "")
+            
             player_totals[player_name] = {
                 "player_username": row.get("player_username", ""),
                 "affiliate_id": affiliate_id,
                 "ftd_date": None if dep == 0 else row_date,  # First deposit date
-                "registration_date": reg_date,
+                "registration_date": actual_reg_date or "",  # Use actual registration date
                 "first_deposit_amount": dep if dep > 0 else 0.0,  # Amount of first deposit
                 "deposit": 0.0, "withdrawal": 0.0, "bonus": 0.0,
                 "deposit_count": 0, "withdrawal_count": 0, "bonus_count": 0,
@@ -1050,16 +1056,85 @@ def admin_clear_all_data(authorization: Optional[str] = Header(None, alias="Auth
     if not is_admin_token(token):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    global raw_data_db, players_db, reports_db
+    global raw_data_db, players_db, reports_db, player_registrations_db
     
     raw_data_db.clear()
     players_db.clear()
     reports_db.clear()
+    player_registrations_db.clear()
     
     return {
         "success": True, 
         "message": "All data cleared successfully",
         "note": "Default affiliate (AFF-1001) remains intact"
+    }
+
+@app.post("/api/admin/sync-registrations")
+def sync_player_registrations_csv(body: dict):
+    """
+    Sync player registration data from CSV
+    CSV format: ClientId (username), SignupDate (registration_date), Affiliate ID
+    
+    Request: {"csv_text": "...", "affiliate_id": "AFF-1001" (optional)}
+    """
+    if not body.get("csv_text"):
+        raise HTTPException(status_code=400, detail="csv_text is required")
+    
+    csv_text = body["csv_text"]
+    affiliate_id = body.get("affiliate_id")
+    
+    global player_registrations_db
+    count = 0
+    
+    reader = csv.reader(csv_text.strip().splitlines())
+    first_row = True
+    col_indices = {}
+    
+    for line_num, raw_cols in enumerate(reader, start=1):
+        cols = [c.strip() for c in raw_cols]
+        if not any(cols):
+            continue
+        
+        if first_row:
+            # Parse headers
+            normalized = [normalize_csv_header(c) for c in cols]
+            for idx, norm_header in enumerate(normalized):
+                if norm_header in ['clientid', 'client_id', 'username', 'player_username']:
+                    col_indices['username'] = idx
+                elif norm_header in ['signupdate', 'signup_date', 'registration_date', 'reg_date']:
+                    col_indices['signup_date'] = idx
+                elif norm_header in ['affiliate_id', 'aff_id', 'affiliate']:
+                    col_indices['affiliate_id'] = idx
+            first_row = False
+            continue
+        
+        # Extract values
+        username = cols[col_indices.get('username', 1)].strip() if 'username' in col_indices else (cols[1] if len(cols) > 1 else '')
+        signup_date = cols[col_indices.get('signup_date', 3)].strip() if 'signup_date' in col_indices else (cols[3] if len(cols) > 3 else '')
+        aff_id = cols[col_indices.get('affiliate_id', 4)].strip() if 'affiliate_id' in col_indices else (cols[4] if len(cols) > 4 else '')
+        
+        if not username or not signup_date:
+            continue
+        
+        # Use affiliate from request if provided
+        if affiliate_id:
+            aff_id = affiliate_id
+        elif not aff_id:
+            aff_id = "AFF-1001"
+        
+        # Store in player_registrations_db
+        player_registrations_db[username.lower()] = {
+            "username": username,
+            "registration_date": signup_date,
+            "affiliate_id": aff_id
+
+        }
+        count += 1
+    
+    return {
+        "success": True,
+        "message": f"Synced {count} player registrations",
+        "count": count
     }
 
 
@@ -1743,12 +1818,13 @@ GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1obOiP3Szeg_MMANRprkF
 
 @app.on_event("startup")
 async def auto_import_on_startup():
-    """Auto-import transaction data from Google Sheets when backend starts"""
+    """Auto-import transaction data and registrations from Google Sheets when backend starts"""
     import threading
     def do_import():
         import time
         time.sleep(3)  # Small delay to let server fully start
         try:
+            # Import transactions from Transaction Daily sheet
             csv_url = convert_google_sheets_url_to_csv_export(GOOGLE_SHEET_URL)
             resp = requests.get(csv_url, timeout=15)
             resp.raise_for_status()
@@ -1756,9 +1832,22 @@ async def auto_import_on_startup():
             if csv_text.strip():
                 payload = TransactionImportRequest(csv_text=csv_text, affiliate_id=None)
                 result = import_transaction_data_from_csv(payload)
-                print(f"[Startup] Auto-imported {result.get('imported_count', 0)} rows from Google Sheets")
+                print(f"[Startup] Auto-imported {result.get('imported_count', 0)} transaction rows from Google Sheets")
             else:
-                print("[Startup] Google Sheet is empty, skipping auto-import")
+                print("[Startup] Transaction sheet is empty, skipping auto-import")
+            
+            # Import registrations from Username Data sheet (gid=1924166779)
+            username_sheet_url = "https://docs.google.com/spreadsheets/d/1obOiP3Szeg_MMANRprkFMUiRTkyXy3XSNaZUETNwxEc/edit#gid=1924166779"
+            csv_url = convert_google_sheets_url_to_csv_export(username_sheet_url)
+            resp = requests.get(csv_url, timeout=15)
+            resp.raise_for_status()
+            csv_text = resp.text
+            if csv_text.strip():
+                sync_player_registrations_csv({"csv_text": csv_text})
+                print(f"[Startup] Auto-synced player registrations from Username Data sheet")
+            else:
+                print("[Startup] Username Data sheet is empty, skipping registration sync")
+                
         except Exception as e:
             print(f"[Startup] Auto-import from Google Sheets failed: {e}")
     threading.Thread(target=do_import, daemon=True).start()
